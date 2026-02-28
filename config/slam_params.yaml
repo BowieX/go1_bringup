@@ -5,7 +5,7 @@ slam_toolbox:
     map_frame: map
     base_frame: body         # 我们的机器人基座帧
     scan_topic: /scan
-    mode: mapping            # 建图模式
+    # 注意: mode 参数对于 online_async_launch.py 无效，已移除
 
     # 算法频率配置
     map_update_interval: 5.0
@@ -14,6 +14,10 @@ slam_toolbox:
     # 地图参数 (5cm 分辨率)
     resolution: 0.05
     max_laser_range: 20.0 # 超过20米的点不用于建图，防止杂点
+    
+    # 使用 TF 而非 odom 消息
+    use_scan_matching: true
+    use_scan_barycenter: true
     
     # 这里的 Plugin 配置是必须的，否则报错
     solver_plugin: solver_plugins::CeresSolver

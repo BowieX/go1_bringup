@@ -3,11 +3,41 @@
 <package format="3">
   <name>go1_bringup</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Go1 robot bringup package for autonomous navigation</description>
   <maintainer email="yudongliu.bit@gmail.com">ziggy</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
+  <!-- Python 依赖 -->
   <depend>rclpy</depend>
+  
+  <!-- Launch 系统依赖 -->
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  
+  <!-- 硬件驱动依赖 -->
+  <exec_depend>unitree_ros</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+  
+  <!-- SLAM 和导航依赖 -->
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_costmap_2d</exec_depend>
+  <exec_depend>nav2_amcl</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  
+  <!-- 数据转换依赖 -->
+  <exec_depend>pointcloud_to_laserscan</exec_depend>
+  
+  <!-- TF 和可视化 -->
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
