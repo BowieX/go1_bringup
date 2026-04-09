@@ -183,6 +183,8 @@ planner_server:
 
 behavior_server:
   ros__parameters:
+    global_frame: camera_init
+    robot_base_frame: body
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0

@@ -29,7 +29,7 @@ slam_toolbox:
 
     # 闭环检测 (Loop Closure) - 可选，先用粗暴配置
     do_loop_closing: true
-    loop_search_space_smear: 0.0
+    loop_search_space_smear: 3.0
     loop_match_minimum_chain_size: 10         
     loop_match_maximum_variance_coarse: 3.0  
     loop_match_minimum_response_coarse: 0.35    
