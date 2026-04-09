@@ -32,6 +32,9 @@
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   
+  <!-- EKF ���程计融合 -->
+  <exec_depend>robot_localization</exec_depend>
+
   <!-- 数据转换依赖 -->
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   

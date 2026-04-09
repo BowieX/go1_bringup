@@ -16,6 +16,8 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
+        # 评估脚本
+        (os.path.join('share', package_name, 'scripts'), glob('scripts/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

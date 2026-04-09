@@ -25,7 +25,7 @@ amcl:
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
     resample_interval: 1
-    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    robot_model_type: "nav2_amcl::OmnidirectionalMotionModel"
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true             # AMCL 负责发布 map -> camera_init 的 TF
@@ -55,7 +55,7 @@ controller_server:
     odom_topic: /Odometry
     controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
@@ -75,24 +75,73 @@ controller_server:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     
-    # 控制器算法 (RPP - 适合机器狗)
+    # 控制器算法 (TEB - 时间弹性带局部规划器，适合全向机器人)
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.3       # 默认巡航速度 (米/秒)
-      lookahead_dist: 0.6           # 预瞄距离
-      min_lookahead_dist: 0.3
-      max_lookahead_dist: 0.9
-      lookahead_time: 1.5
-      rotate_to_heading_min_angle: 0.785
-      transform_tolerance: 0.1
-      use_velocity_scaled_lookahead_dist: false
-      min_approach_linear_velocity: 0.05
-      approach_velocity_scaling_dist: 0.6
-      max_allowed_time_to_collision_up_to_carrot: 1.0
-      use_collision_detection: true
-      max_linear_accel: 2.5
-      max_linear_decel: 2.5
-      use_rotated_width: true
+      plugin: "teb_local_planner::TebLocalPlannerROS"
+
+      # === 轨迹优化参数 ===
+      teb_autosize: true              # 自动调整时间分辨率
+      dt_ref: 0.3                     # 期望的轨迹时间分辨率 (秒)
+      dt_hysteresis: 0.1              # 时间分辨率滞环阈值
+      max_samples: 500                # 最大采样数
+      global_plan_overwrite_orientation: true
+      allow_init_with_backwards_motion: true
+      max_global_plan_lookahead_dist: 3.0  # 全局路径前瞻距离 (米)
+      global_plan_viapoint_sep: -1.0
+      global_plan_prune_distance: 1.0
+      exact_arc_length: false
+      feasibility_check_no_poses: 5
+      publish_feedback: false
+
+      # === 全向机器人运动学参数 (关键配置) ===
+      max_vel_x: 0.4                  # X轴最大线速度 (米/秒)
+      max_vel_x_backwards: 0.2        # 后退最大线速度
+      max_vel_y: 0.3                  # Y轴最大线速度 (全向机器人必须 > 0)
+      max_vel_theta: 1.0              # 最大角速度 (弧度/秒)
+      acc_lim_x: 2.5                  # X轴加速度限制
+      acc_lim_y: 2.5                  # Y轴加速度限制 (全向)
+      acc_lim_theta: 3.2              # 角加速度限制
+
+      # === 机器人足迹模型 ===
+      footprint_model.type: "circular"
+      footprint_model.radius: 0.25    # Go1 半径
+
+      # === 障碍物参数 ===
+      min_obstacle_dist: 0.25         # 与障碍物最小距离 (��)
+      inflation_dist: 0.6             # 膨胀距离
+      include_costmap_obstacles: true
+      costmap_obstacles_behind_robot_dist: 1.5
+      obstacle_poses_affected: 15
+      dynamic_obstacle_inflation_dist: 0.6
+      include_dynamic_obstacles: true
+
+      # === 全向机器人标志 (必须为 true) ===
+      holonomic_robot: true
+
+      # === 优化权重参数 ===
+      no_inner_iterations: 5
+      no_outer_iterations: 4
+      optimization_activate: true
+      optimization_verbose: false
+      penalty_epsilon: 0.1
+      obstacle_cost_exponent: 4
+      weight_max_vel_x: 2.0
+      weight_max_vel_y: 2.0           # 全向: Y轴速度权重
+      weight_max_vel_theta: 1.0
+      weight_acc_lim_x: 1.0
+      weight_acc_lim_y: 1.0           # 全向: Y轴加速度权重
+      weight_acc_lim_theta: 1.0
+      weight_kinematics_nh: 0.0       # 全向机器人设为 0 (非完整约束权重)
+      weight_kinematics_forward_drive: 1.0
+      weight_kinematics_turning_radius: 0.0  # 全向机器人无最小转弯半径
+      weight_optimaltime: 1.0         # 时间最优权重
+      weight_shortest_path: 0.0
+      weight_obstacle: 100.0          # 避障权重 (高优先级)
+      weight_inflation: 0.2
+      weight_dynamic_obstacle: 10.0
+      weight_dynamic_obstacle_inflation: 0.2
+      weight_viapoint: 1.0
+      weight_adapt_factor: 2.0
 
 local_costmap:
   local_costmap:
@@ -178,7 +227,7 @@ planner_server:
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
       tolerance: 0.5
-      use_astar: false
+      use_astar: true
       allow_unknown: true
 
 behavior_server:

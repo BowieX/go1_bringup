@@ -17,6 +17,8 @@ def generate_launch_description():
     # ---------------- 配置文件 ----------------
     # 3D转2D的参数配置
     pc2scan_config = os.path.join(bringup_pkg, 'config', 'pointcloud_to_laserscan_params.yaml')
+    # EKF融合里程计配置 (robot_localization)
+    ekf_config = os.path.join(bringup_pkg, 'config', 'ekf_odom_fusion.yaml')
 
     # ---------------- 1. 硬件驱动 ----------------
     # Unitree Go1 驱动 (底层运动控制)
@@ -47,13 +49,32 @@ def generate_launch_description():
         name='body_to_lidar_tf',
         arguments=[
             '--x', '0.1',
-            '--y', '0.0', 
+            '--y', '0.0',
             '--z', '0.15',
             '--yaw', '0.0',
             '--pitch', '0.0',
             '--roll', '0.0',
             '--frame-id', 'body',
             '--child-frame-id', 'livox_frame'
+        ]
+    )
+
+    # 静态 TF: 帧桥接 unitree_base -> body (单位变换)
+    # unitree_ros 发布的里程计使用 unitree_odom -> unitree_base 帧
+    # robot_localization 需要在 body 帧中工作，因此需要桥接
+    unitree_base_to_body_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='unitree_base_to_body_tf',
+        arguments=[
+            '--x', '0.0',
+            '--y', '0.0',
+            '--z', '0.0',
+            '--yaw', '0.0',
+            '--pitch', '0.0',
+            '--roll', '0.0',
+            '--frame-id', 'unitree_base',
+            '--child-frame-id', 'body'
         ]
     )
 
@@ -69,7 +90,21 @@ def generate_launch_description():
         }.items()
     )
 
-    # ---------------- 4. 数据转换 (3D -> 2D) ----------------
+    # ---------------- 4. EKF 里程计融合 (robot_localization) ----------------
+    # 融合 Go1 腿部里程计 (/odom) 和机体 IMU (/imu)，输出平滑里程计 (/odometry/filtered)
+    # 该融合结果作为先验信息，供改进后的 FAST-LIO2 在几何退化场景下使用
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[ekf_config],
+        remappings=[
+            ('odometry/filtered', '/odometry/filtered')
+        ]
+    )
+
+    # ---------------- 5. 数据转换 (3D -> 2D) ----------------
     # 将 FAST_LIO 输出的去畸变 3D 点云 (/cloud_registered) 压扁成 2D 激光 (/scan)
     pointcloud_to_laserscan_node = Node(
         package='pointcloud_to_laserscan',
@@ -86,6 +121,8 @@ def generate_launch_description():
         unitree_driver,
         livox_driver,
         lidar_tf,
+        unitree_base_to_body_tf,
         fast_lio_node,
+        ekf_node,
         pointcloud_to_laserscan_node
     ])
