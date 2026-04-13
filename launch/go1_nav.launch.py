@@ -20,6 +20,7 @@ def generate_launch_description():
 
     map_yaml_file = LaunchConfiguration('map')
     params_file = LaunchConfiguration('params_file')
+    use_odom_fusion = LaunchConfiguration('use_odom_fusion')
 
     declare_map = DeclareLaunchArgument(
         'map',
@@ -31,11 +32,17 @@ def generate_launch_description():
         default_value=nav_params,
         description='Full path to the ROS2 parameters file to use')
 
+    declare_use_odom_fusion = DeclareLaunchArgument(
+        'use_odom_fusion',
+        default_value='true',
+        description='是否启动 robot_localization EKF 融合节点')
+
     # 1. 启动底层 (驱动 + 里程计) - 注意：这里不带 SLAM
     base_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(go1_bringup_pkg, 'launch', 'go1_base.launch.py')
-        )
+        ),
+        launch_arguments={'use_odom_fusion': use_odom_fusion}.items()
     )
 
     # 2. 启动 Nav2 (定位 + 规划 + 控制)
@@ -65,6 +72,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_map,
         declare_params,
+        declare_use_odom_fusion,
         base_launch,
         nav2_launch,
         rviz_node

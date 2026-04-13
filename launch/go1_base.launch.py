@@ -3,11 +3,20 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
 from launch_ros.actions import Node
 
 def generate_launch_description():
+    # ---------------- Launch 参数 ----------------
+    use_odom_fusion = LaunchConfiguration('use_odom_fusion')
+    declare_use_odom_fusion = DeclareLaunchArgument(
+        'use_odom_fusion',
+        default_value='true',
+        description='是否启动 robot_localization EKF 融合节点 (false=基础模式，不依赖 robot_localization)')
+
     # ---------------- 路径获取 ----------------
     unitree_pkg = get_package_share_directory('unitree_ros')
     livox_pkg = get_package_share_directory('livox_ros_driver2')
@@ -28,13 +37,13 @@ def generate_launch_description():
         )
     )
 
-    # Livox MID360 驱动
-    # 注意：msg_MID360_launch.py 不接受 launch_arguments
-    # 如需修改参数，请直接编辑 livox_ros_driver2/launch/msg_MID360_launch.py
+    # Livox MID360S 驱动
+    # 注意：msg_MID360s_launch.py 不接受 launch_arguments
+    # 如需修改参数，请直接编辑 livox_ros_driver2/launch_ROS2/msg_MID360s_launch.py
     # 默认配置：frame_id='livox_frame', publish_freq=10.0, xfer_format=1 (CustomMsg)
     livox_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(livox_pkg, 'launch', 'msg_MID360_launch.py')
+            os.path.join(livox_pkg, 'launch', 'msg_MID360s_launch.py')
         )
     )
 
@@ -62,6 +71,7 @@ def generate_launch_description():
     # 静态 TF: 帧桥接 unitree_base -> body (单位变换)
     # unitree_ros 发布的里程计使用 unitree_odom -> unitree_base 帧
     # robot_localization 需要在 body 帧中工作，因此需要桥接
+    # 仅在启用里程计融合时需要
     unitree_base_to_body_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -75,7 +85,8 @@ def generate_launch_description():
             '--roll', '0.0',
             '--frame-id', 'unitree_base',
             '--child-frame-id', 'body'
-        ]
+        ],
+        condition=IfCondition(use_odom_fusion)
     )
 
     # ---------------- 3. 里程计算法 (FAST_LIO) ----------------
@@ -86,13 +97,14 @@ def generate_launch_description():
         ),
         launch_arguments={
             'rviz': 'false',          # 基础启动时不看 Rviz
-            'config_file': 'mid360.yaml' # 确保这里对应你的 yaml 文件名
+            'config_file': 'mid360.yaml' # FAST-LIO 配置 (MID-360 和 MID-360S 通用)
         }.items()
     )
 
     # ---------------- 4. EKF 里程计融合 (robot_localization) ----------------
     # 融合 Go1 腿部里程计 (/odom) 和机体 IMU (/imu)，输出平滑里程计 (/odometry/filtered)
     # 该融合结果作为先验信息，供改进后的 FAST-LIO2 在几何退化场景下使用
+    # 仅在启用里程计融合时启动 (use_odom_fusion:=true)
     ekf_node = Node(
         package='robot_localization',
         executable='ekf_node',
@@ -101,7 +113,8 @@ def generate_launch_description():
         parameters=[ekf_config],
         remappings=[
             ('odometry/filtered', '/odometry/filtered')
-        ]
+        ],
+        condition=IfCondition(use_odom_fusion)
     )
 
     # ---------------- 5. 数据转换 (3D -> 2D) ----------------
@@ -118,6 +131,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_use_odom_fusion,
         unitree_driver,
         livox_driver,
         lidar_tf,

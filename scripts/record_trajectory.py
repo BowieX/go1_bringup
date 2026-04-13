@@ -8,10 +8,18 @@
 
 TUM 格式: timestamp tx ty tz qx qy qz qw
 
-使用方式:
-  ros2 run go1_bringup record_trajectory.py --ros-args \
-    -p output_dir:=/path/to/save \
-    -p record_mode:=both
+record_mode 选项:
+  - 'fastlio': 仅记录 /Odometry (FAST-LIO2)
+  - 'fused':   仅记录 /odometry/filtered (EKF 融合)
+  - 'both':    记录 fastlio + fused
+  - 'all':     记录 fastlio + fused + /odom (原始腿部里程计)
+
+使用方式 (在线):
+  python3 record_trajectory.py --ros-args -p output_dir:=/path -p record_mode:=both
+
+使用方式 (rosbag 回放):
+  python3 record_trajectory.py --ros-args -p use_sim_time:=true \
+    -p output_dir:=/path -p record_mode:=fastlio
 """
 
 import os
@@ -26,7 +34,8 @@ class TrajectoryRecorder(Node):
 
         # 参数: 输出目录和记录模式
         self.declare_parameter('output_dir', os.path.expanduser('~/go1_ws/trajectories'))
-        self.declare_parameter('record_mode', 'both')  # 'fastlio', 'fused', 'both'
+        self.declare_parameter('record_mode', 'both')  # 'fastlio', 'fused', 'both', 'all'
+        self.declare_parameter('use_sim_time', False)   # rosbag 回放时设为 true
 
         output_dir = self.get_parameter('output_dir').get_parameter_value().string_value
         self.record_mode = self.get_parameter('record_mode').get_parameter_value().string_value
@@ -37,25 +46,32 @@ class TrajectoryRecorder(Node):
         # 打开输出文件
         self.file_fastlio = None
         self.file_fused = None
+        self.file_odom = None
 
-        if self.record_mode in ('fastlio', 'both'):
+        if self.record_mode in ('fastlio', 'both', 'all'):
             filepath = os.path.join(output_dir, 'traj_fastlio.txt')
             self.file_fastlio = open(filepath, 'w')
             self.get_logger().info(f'Recording FAST-LIO2 trajectory to: {filepath}')
-            # 订阅 FAST-LIO2 里程计
             self.sub_fastlio = self.create_subscription(
                 Odometry, '/Odometry', self.fastlio_callback, 50)
 
-        if self.record_mode in ('fused', 'both'):
+        if self.record_mode in ('fused', 'both', 'all'):
             filepath = os.path.join(output_dir, 'traj_fused_odom.txt')
             self.file_fused = open(filepath, 'w')
             self.get_logger().info(f'Recording fused odom trajectory to: {filepath}')
-            # 订阅融合里程计
             self.sub_fused = self.create_subscription(
                 Odometry, '/odometry/filtered', self.fused_callback, 50)
 
+        if self.record_mode == 'all':
+            filepath = os.path.join(output_dir, 'traj_leg_odom.txt')
+            self.file_odom = open(filepath, 'w')
+            self.get_logger().info(f'Recording raw leg odom trajectory to: {filepath}')
+            self.sub_odom = self.create_subscription(
+                Odometry, '/odom', self.odom_callback, 50)
+
         self.fastlio_count = 0
         self.fused_count = 0
+        self.odom_count = 0
 
         # 每10秒输出一次统计
         self.timer = self.create_timer(10.0, self.print_stats)
@@ -77,14 +93,25 @@ class TrajectoryRecorder(Node):
             self.file_fused.write(self.odom_to_tum_line(msg))
             self.fused_count += 1
 
+    def odom_callback(self, msg: Odometry):
+        if self.file_odom:
+            self.file_odom.write(self.odom_to_tum_line(msg))
+            self.odom_count += 1
+
     def print_stats(self):
-        self.get_logger().info(
-            f'Recorded: FAST-LIO2={self.fastlio_count}, Fused={self.fused_count} poses')
+        parts = [f'FAST-LIO2={self.fastlio_count}']
+        if self.file_fused:
+            parts.append(f'Fused={self.fused_count}')
+        if self.file_odom:
+            parts.append(f'LegOdom={self.odom_count}')
+        self.get_logger().info(f'Recorded: {", ".join(parts)} poses')
         # 刷新文件确保数据写入磁盘
         if self.file_fastlio:
             self.file_fastlio.flush()
         if self.file_fused:
             self.file_fused.flush()
+        if self.file_odom:
+            self.file_odom.flush()
 
     def destroy_node(self):
         """节点销毁时关闭文件"""
@@ -94,6 +121,9 @@ class TrajectoryRecorder(Node):
         if self.file_fused:
             self.file_fused.close()
             self.get_logger().info(f'Fused odom trajectory saved ({self.fused_count} poses)')
+        if self.file_odom:
+            self.file_odom.close()
+            self.get_logger().info(f'Raw leg odom trajectory saved ({self.odom_count} poses)')
         super().destroy_node()
 
 

@@ -3,13 +3,21 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
     bringup_pkg = get_package_share_directory('go1_bringup')
     slam_toolbox_pkg = get_package_share_directory('slam_toolbox')
+
+    # Launch 参数
+    use_odom_fusion = LaunchConfiguration('use_odom_fusion')
+    declare_use_odom_fusion = DeclareLaunchArgument(
+        'use_odom_fusion',
+        default_value='true',
+        description='是否启动 robot_localization EKF 融合节点')
 
     # 配置文件
     slam_config = os.path.join(bringup_pkg, 'config', 'slam_params.yaml')
@@ -18,7 +26,8 @@ def generate_launch_description():
     base_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(bringup_pkg, 'launch', 'go1_base.launch.py')
-        )
+        ),
+        launch_arguments={'use_odom_fusion': use_odom_fusion}.items()
     )
 
     # 2. 启动 SLAM Toolbox (建图模式)
@@ -33,6 +42,7 @@ def generate_launch_description():
     # 建议手动运行: ros2 run rviz2 rviz2 -d <your_rviz_config>
 
     return LaunchDescription([
+        declare_use_odom_fusion,
         base_launch,
         slam_toolbox_node
     ])

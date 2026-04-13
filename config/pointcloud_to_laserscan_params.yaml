@@ -9,7 +9,7 @@ pointcloud_to_laserscan:
     # LiDAR坐标系: X正=前方, 角度0=正前方, ±π=正后方
     angle_min: -2.618  # -150° = -5π/6
     angle_max: 2.618   # +150° = +5π/6
-    angle_increment: 0.0087 # M_PI/360.0
+    angle_increment: 0.00871 # 修正: 使 ceil(range/inc) == Round(range/inc)+1, 解决 slam_toolbox 602 vs 603 mismatch
     scan_time: 0.1
     range_min: 0.1
     range_max: 100.0
