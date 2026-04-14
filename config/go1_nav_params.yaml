@@ -93,22 +93,26 @@ controller_server:
       feasibility_check_no_poses: 5
       publish_feedback: false
 
-      # === 全向机器人运动学参数 (关键配置) ===
-      max_vel_x: 0.4                  # X轴最大线速度 (米/秒)
-      max_vel_x_backwards: 0.2        # 后退最大线速度
-      max_vel_y: 0.3                  # Y轴最大线速度 (全向机器人必须 > 0)
-      max_vel_theta: 1.0              # 最大角速度 (弧度/秒)
-      acc_lim_x: 2.5                  # X轴加速度限制
-      acc_lim_y: 2.5                  # Y轴加速度限制 (全向)
-      acc_lim_theta: 3.2              # 角加速度限制
+      # === 全向机器人运动学参数 ===
+      # 当前值为"首次部署保守配置"，稳定运行后可上调 (见实验手册 §10.4)
+      #   激进配置参考: max_vel_x=0.4, max_vel_y=0.3, max_vel_theta=1.0
+      max_vel_x: 0.3                  # X轴最大线速度 (米/秒)
+      max_vel_x_backwards: 0.15       # 后退最大线速度
+      max_vel_y: 0.2                  # Y轴最大线速度 (全向机器人必须 > 0)
+      max_vel_theta: 0.7              # 最大角速度 (弧度/秒)
+      acc_lim_x: 1.5                  # X轴加速度限制 (保守)
+      acc_lim_y: 1.5                  # Y轴加速度限制 (全向)
+      acc_lim_theta: 2.0              # 角加速度限制
 
       # === 机器人足迹模型 ===
+      # Go1 外形约 0.65m(长) × 0.28m(宽)，用圆近似需取外接圆一半 ≈0.35m
+      # 取 0.32m 兼顾安全余量与通过性 (门宽通常 ≥0.8m)
       footprint_model.type: "circular"
-      footprint_model.radius: 0.25    # Go1 半径
+      footprint_model.radius: 0.32
 
       # === 障碍物参数 ===
-      min_obstacle_dist: 0.25         # 与障碍物最小距离 (��)
-      inflation_dist: 0.6             # 膨胀距离
+      min_obstacle_dist: 0.30         # 与障碍物最小距离 (m)
+      inflation_dist: 0.55            # 膨胀距离 (略大于 min_obstacle_dist)
       include_costmap_obstacles: true
       costmap_obstacles_behind_robot_dist: 1.5
       obstacle_poses_affected: 15
@@ -124,7 +128,9 @@ controller_server:
       optimization_activate: true
       optimization_verbose: false
       penalty_epsilon: 0.1
-      obstacle_cost_exponent: 4
+      # obstacle_cost_exponent=1 线性惩罚 (默认)；=4 四次方激进避障但易卡死
+      # 首次部署用 1，若出现"擦碰障碍"再调到 2-4
+      obstacle_cost_exponent: 1
       weight_max_vel_x: 2.0
       weight_max_vel_y: 2.0           # 全向: Y轴速度权重
       weight_max_vel_theta: 1.0
@@ -136,7 +142,8 @@ controller_server:
       weight_kinematics_turning_radius: 0.0  # 全向机器人无最小转弯半径
       weight_optimaltime: 1.0         # 时间最优权重
       weight_shortest_path: 0.0
-      weight_obstacle: 100.0          # 避障权重 (高优先级)
+      # weight_obstacle=50 中等偏好避障；=100+ 可能导致狭窄通道无法通过
+      weight_obstacle: 50.0
       weight_inflation: 0.2
       weight_dynamic_obstacle: 10.0
       weight_dynamic_obstacle_inflation: 0.2
@@ -155,7 +162,7 @@ local_costmap:
       width: 4
       height: 4
       resolution: 0.05
-      robot_radius: 0.25           # <--- Go1 的半径
+      robot_radius: 0.32           # Go1 外接圆半径 (需与 TEB footprint_model.radius 一致)
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -189,7 +196,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: body       # <--- 修改
       use_sim_time: False
-      robot_radius: 0.25
+      robot_radius: 0.32           # 与 local_costmap 一致
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -254,3 +261,25 @@ waypoint_follower:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"
       enabled: True
       waypoint_pause_duration: 200
+
+# =============================================================================
+# velocity_smoother: 在 TEB 输出 cmd_vel 与 Go1 驱动之间做速度平滑
+# 作用: 抑制 TEB 优化结果的高频抖动，减少 Go1 关节电机冲击
+# 输入: /cmd_vel_nav (Nav2 输出), 输出: /cmd_vel (送给 unitree_ros)
+# 注意: velocity_smoother 激活后，Nav2 默认把控制器输出改发布到 /cmd_vel_nav，
+#       smoother 再发 /cmd_vel — 这与 unitree_ros 订阅的话题名天然一致。
+# =============================================================================
+velocity_smoother:
+  ros__parameters:
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"              # Go1 无精确速度反馈，用开环
+    # 速度/加速度限制需与 TEB 的 max_vel_*/acc_lim_* 保持一致或略宽
+    max_velocity: [0.3, 0.2, 0.7]      # [vx, vy, wz]
+    min_velocity: [-0.15, -0.2, -0.7]
+    max_accel: [1.5, 1.5, 2.0]
+    max_decel: [-1.5, -1.5, -2.0]
+    odom_topic: "/Odometry"            # 用 FAST-LIO 的 10Hz 里程计
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0

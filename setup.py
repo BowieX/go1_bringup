@@ -13,7 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.py'))),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml') + glob('config/*.rviz')),
         # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
         # 评估脚本

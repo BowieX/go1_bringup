@@ -21,6 +21,7 @@ def generate_launch_description():
 
     # 配置文件
     slam_config = os.path.join(bringup_pkg, 'config', 'slam_params.yaml')
+    rviz_config = os.path.join(bringup_pkg, 'config', 'go1_mapping.rviz')
 
     # 1. 启动底层 (驱动 + 里程计 + 数据转换)
     base_launch = IncludeLaunchDescription(
@@ -38,11 +39,18 @@ def generate_launch_description():
         launch_arguments={'slam_params_file': slam_config}.items()
     )
 
-    # 3. 启动 Rviz (可选，这里不强制，可以手动启动)
-    # 建议手动运行: ros2 run rviz2 rviz2 -d <your_rviz_config>
+    # 3. 启动 RViz2 (自动加载建图可视化配置)
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2_mapping',
+        arguments=['-d', rviz_config],
+        output='screen'
+    )
 
     return LaunchDescription([
         declare_use_odom_fusion,
         base_launch,
-        slam_toolbox_node
+        slam_toolbox_node,
+        rviz_node
     ])

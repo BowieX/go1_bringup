@@ -48,21 +48,25 @@ def generate_launch_description():
     )
 
     # ---------------- 2. TF 变换 ----------------
-    # 静态 TF: 告诉 ROS 雷达安装在机器狗的什么位置
-    # 假设雷达安装在狗背部上方 15cm, 前方 10cm
-    # body 是机器狗中心 (FAST_LIO输出), livox_frame 是雷达数据坐标系
-    # ROS 2 Humble 推荐使用 --frame-id 和 --child-frame-id 格式
+    # 静态 TF: body -> livox_frame (LiDAR 相对机体的安装外参)
+    #
+    # ⚠️ 实机部署必须重新测量以下 6 个参数！ (见实验手册 §4.5 LiDAR 外参测量)
+    #    body      = 机器狗腰部几何中心 (四腿投影中心)，FAST-LIO 位姿输出帧
+    #    livox_frame = MID-360S 外壳几何中心，LiDAR 数据帧
+    #    坐标系: X 前、Y 左、Z 上 (ROS REP-103)
+    #    x 正值 = LiDAR 在机体前方；y 正值 = 在左侧；z 正值 = 在上方
+    #    精度要求: x/y 误差 <2cm，z 误差 <1cm
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='body_to_lidar_tf',
         arguments=[
-            '--x', '0.1',
-            '--y', '0.0',
-            '--z', '0.15',
-            '--yaw', '0.0',
-            '--pitch', '0.0',
-            '--roll', '0.0',
+            '--x', '0.10',     # TODO(实机): LiDAR 相对 body 的前后偏移 (m)
+            '--y', '0.00',     # TODO(实机): 左右偏移 (m)
+            '--z', '0.15',     # TODO(实机): 上下偏移 (m)
+            '--yaw',   '0.0',  # TODO(实机): 安装偏角 (rad, 绕 Z)
+            '--pitch', '0.0',  # TODO(实机): 安装俯仰 (rad, 绕 Y，向下倾为负)
+            '--roll',  '0.0',  # TODO(实机): 安装滚转 (rad, 绕 X)
             '--frame-id', 'body',
             '--child-frame-id', 'livox_frame'
         ]

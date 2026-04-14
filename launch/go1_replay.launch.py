@@ -42,17 +42,18 @@ def generate_launch_description():
 
     # ---------------- 静态 TF ----------------
     # body -> livox_frame (始终需要)
+    # ⚠️ 外参必须与 go1_base.launch.py 保持一致！修改时两处同步 (见实验手册 §4.5)
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='body_to_lidar_tf',
         arguments=[
-            '--x', '0.1',
-            '--y', '0.0',
+            '--x', '0.10',
+            '--y', '0.00',
             '--z', '0.15',
-            '--yaw', '0.0',
+            '--yaw',   '0.0',
             '--pitch', '0.0',
-            '--roll', '0.0',
+            '--roll',  '0.0',
             '--frame-id', 'body',
             '--child-frame-id', 'livox_frame'
         ],

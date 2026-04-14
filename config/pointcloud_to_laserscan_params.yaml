@@ -4,11 +4,12 @@ pointcloud_to_laserscan:
     transform_tolerance: 0.2  # 建议改为 0.2 (200ms)
     min_height: -0.1
     max_height: 0.5
-    # 角度范围: 排除机体正后方60°扇区以过滤跟随操作者的干扰
-    # 完整圆周为 -π ~ +π，排除后方 ±30° 即保留 -150° ~ +150°
+    # 角度范围: 排除机体正后方扇区以过滤跟随操作者的干扰
+    # 完整圆周为 -π ~ +π，排除后方 ±40° 即保留 -140° ~ +140°
+    # (需与 FAST_LIO mid360.yaml 的 tail_fov_half_angle 保持一致)
     # LiDAR坐标系: X正=前方, 角度0=正前方, ±π=正后方
-    angle_min: -2.618  # -150° = -5π/6
-    angle_max: 2.618   # +150° = +5π/6
+    angle_min: -2.443  # -140° ≈ -7π/9 (靠近跟随: 扩大后方盲区到 ±40°)
+    angle_max: 2.443   # +140°
     angle_increment: 0.00871 # 修正: 使 ceil(range/inc) == Round(range/inc)+1, 解决 slam_toolbox 602 vs 603 mismatch
     scan_time: 0.1
     range_min: 0.1
