@@ -21,25 +21,7 @@ def generate_launch_description():
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
-        description='是否使用仿真时钟 /clock (true 时所有节点 use_sim_time:=true，配合 go1_sim.launch.py)')
-
-    use_hardware = LaunchConfiguration('use_hardware')
-    declare_use_hardware = DeclareLaunchArgument(
-        'use_hardware',
-        default_value='true',
-        description='是否启动实机硬件驱动 (unitree_ros + livox_ros_driver2)；仿真时设为 false')
-
-    fast_lio_config = LaunchConfiguration('fast_lio_config')
-    declare_fast_lio_config = DeclareLaunchArgument(
-        'fast_lio_config',
-        default_value='mid360.yaml',
-        description='FAST-LIO 配置文件名 (实机=mid360.yaml, 仿真=mid360s_sim.yaml)')
-
-    fast_lio_config_path = LaunchConfiguration('fast_lio_config_path')
-    declare_fast_lio_config_path = DeclareLaunchArgument(
-        'fast_lio_config_path',
-        default_value='',
-        description='FAST-LIO 配置文件所在目录 (空=用 fast_lio 包默认; 仿真填 go1_bringup share/config)')
+        description='是否使用仿真时钟 /clock (离线回放时设为 true)')
 
     # ---------------- 路径获取 ----------------
     unitree_pkg = get_package_share_directory('unitree_ros')
@@ -54,21 +36,18 @@ def generate_launch_description():
     ekf_config = os.path.join(bringup_pkg, 'config', 'ekf_odom_fusion.yaml')
 
     # ---------------- 1. 硬件驱动 ----------------
-    # Unitree Go1 驱动 (底层运动控制)。仿真模式 (use_hardware:=false) 跳过
+    # Unitree Go1 驱动 (底层运动控制)
     unitree_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(unitree_pkg, 'launch', 'unitree_driver_launch.py')
         ),
-        condition=IfCondition(use_hardware)
     )
 
     # Livox MID360S 驱动 (注意是 MID360s 不是 MID360, 且 launch 不接受 launch_arguments)
-    # 仿真模式跳过 —— 由 ros_gz_bridge 提供 /livox/lidar 与 /livox/imu
     livox_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(livox_pkg, 'launch', 'msg_MID360s_launch.py')
         ),
-        condition=IfCondition(use_hardware)
     )
 
     # ---------------- 2. TF 变换 ----------------
@@ -126,9 +105,8 @@ def generate_launch_description():
             os.path.join(fast_lio_pkg, 'launch', 'mapping.launch.py')
         ),
         launch_arguments={
-            'rviz': 'false',          # 基础启动时不看 Rviz
-            'config_file': fast_lio_config,  # mid360.yaml (实机) / mid360s_sim.yaml (仿真)
-            'config_path': fast_lio_config_path,  # 空时 fast_lio 用自带 config 目录
+            'rviz': 'false',
+            'config_file': 'mid360.yaml',
             'use_sim_time': use_sim_time
         }.items()
     )
@@ -165,9 +143,6 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_odom_fusion,
         declare_use_sim_time,
-        declare_use_hardware,
-        declare_fast_lio_config,
-        declare_fast_lio_config_path,
         unitree_driver,
         livox_driver,
         lidar_tf,
