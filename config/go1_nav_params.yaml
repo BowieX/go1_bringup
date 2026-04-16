@@ -29,7 +29,7 @@ amcl:
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true             # AMCL 负责发布 map -> camera_init 的 TF
-    transform_tolerance: 1.0
+    transform_tolerance: 0.3       # TF 容忍延迟 (秒); 1.0 太大，0.3m/s下=9cm位置误差
     updater_error: 0.01
     z_hit: 0.5
     z_max: 0.05
@@ -100,9 +100,9 @@ controller_server:
       max_vel_x_backwards: 0.15       # 后退最大线速度
       max_vel_y: 0.2                  # Y轴最大线速度 (全向机器人必须 > 0)
       max_vel_theta: 0.7              # 最大角速度 (弧度/秒)
-      acc_lim_x: 1.5                  # X轴加速度限制 (保守)
-      acc_lim_y: 1.5                  # Y轴加速度限制 (全向)
-      acc_lim_theta: 2.0              # 角加速度限制
+      acc_lim_x: 0.8                  # X轴加速度限制 (四足步态安全范围)
+      acc_lim_y: 0.8                  # Y轴加速度限制 (全向)
+      acc_lim_theta: 1.5              # 角加速度限制
 
       # === 机器人足迹模型 ===
       # Go1 外形约 0.65m(长) × 0.28m(宽)，用圆近似需取外接圆一半 ≈0.35m
@@ -255,7 +255,7 @@ behavior_server:
 waypoint_follower:
   ros__parameters:
     loop_rate: 20
-    stop_on_failure: false
+    stop_on_failure: true
     waypoint_task_executor_plugin: "wait_at_waypoint"
     wait_at_waypoint:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"
