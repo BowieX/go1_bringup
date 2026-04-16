@@ -17,6 +17,30 @@ def generate_launch_description():
         default_value='true',
         description='是否启动 robot_localization EKF 融合节点 (false=基础模式，不依赖 robot_localization)')
 
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='是否使用仿真时钟 /clock (true 时所有节点 use_sim_time:=true，配合 go1_sim.launch.py)')
+
+    use_hardware = LaunchConfiguration('use_hardware')
+    declare_use_hardware = DeclareLaunchArgument(
+        'use_hardware',
+        default_value='true',
+        description='是否启动实机硬件驱动 (unitree_ros + livox_ros_driver2)；仿真时设为 false')
+
+    fast_lio_config = LaunchConfiguration('fast_lio_config')
+    declare_fast_lio_config = DeclareLaunchArgument(
+        'fast_lio_config',
+        default_value='mid360.yaml',
+        description='FAST-LIO 配置文件名 (实机=mid360.yaml, 仿真=mid360s_sim.yaml)')
+
+    fast_lio_config_path = LaunchConfiguration('fast_lio_config_path')
+    declare_fast_lio_config_path = DeclareLaunchArgument(
+        'fast_lio_config_path',
+        default_value='',
+        description='FAST-LIO 配置文件所在目录 (空=用 fast_lio 包默认; 仿真填 go1_bringup share/config)')
+
     # ---------------- 路径获取 ----------------
     unitree_pkg = get_package_share_directory('unitree_ros')
     livox_pkg = get_package_share_directory('livox_ros_driver2')
@@ -30,21 +54,21 @@ def generate_launch_description():
     ekf_config = os.path.join(bringup_pkg, 'config', 'ekf_odom_fusion.yaml')
 
     # ---------------- 1. 硬件驱动 ----------------
-    # Unitree Go1 驱动 (底层运动控制)
+    # Unitree Go1 驱动 (底层运动控制)。仿真模式 (use_hardware:=false) 跳过
     unitree_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(unitree_pkg, 'launch', 'unitree_driver_launch.py')
-        )
+        ),
+        condition=IfCondition(use_hardware)
     )
 
-    # Livox MID360S 驱动
-    # 注意：msg_MID360s_launch.py 不接受 launch_arguments
-    # 如需修改参数，请直接编辑 livox_ros_driver2/launch_ROS2/msg_MID360s_launch.py
-    # 默认配置：frame_id='livox_frame', publish_freq=10.0, xfer_format=1 (CustomMsg)
+    # Livox MID360S 驱动 (注意是 MID360s 不是 MID360, 且 launch 不接受 launch_arguments)
+    # 仿真模式跳过 —— 由 ros_gz_bridge 提供 /livox/lidar 与 /livox/imu
     livox_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(livox_pkg, 'launch', 'msg_MID360s_launch.py')
-        )
+        ),
+        condition=IfCondition(use_hardware)
     )
 
     # ---------------- 2. TF 变换 ----------------
@@ -69,7 +93,8 @@ def generate_launch_description():
             '--roll',  '0.0',  # TODO(实机): 安装滚转 (rad, 绕 X)
             '--frame-id', 'body',
             '--child-frame-id', 'livox_frame'
-        ]
+        ],
+        parameters=[{'use_sim_time': use_sim_time}]
     )
 
     # 静态 TF: 帧桥接 unitree_base -> body (单位变换)
@@ -90,6 +115,7 @@ def generate_launch_description():
             '--frame-id', 'unitree_base',
             '--child-frame-id', 'body'
         ],
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_odom_fusion)
     )
 
@@ -101,7 +127,9 @@ def generate_launch_description():
         ),
         launch_arguments={
             'rviz': 'false',          # 基础启动时不看 Rviz
-            'config_file': 'mid360.yaml' # FAST-LIO 配置 (MID-360 和 MID-360S 通用)
+            'config_file': fast_lio_config,  # mid360.yaml (实机) / mid360s_sim.yaml (仿真)
+            'config_path': fast_lio_config_path,  # 空时 fast_lio 用自带 config 目录
+            'use_sim_time': use_sim_time
         }.items()
     )
 
@@ -114,7 +142,7 @@ def generate_launch_description():
         executable='ekf_node',
         name='ekf_filter_node',
         output='screen',
-        parameters=[ekf_config],
+        parameters=[ekf_config, {'use_sim_time': use_sim_time}],
         remappings=[
             ('odometry/filtered', '/odometry/filtered')
         ],
@@ -131,11 +159,15 @@ def generate_launch_description():
             ('cloud_in', '/cloud_registered'), # FAST_LIO 的输出话题
             ('scan', '/scan')
         ],
-        parameters=[pc2scan_config]
+        parameters=[pc2scan_config, {'use_sim_time': use_sim_time}]
     )
 
     return LaunchDescription([
         declare_use_odom_fusion,
+        declare_use_sim_time,
+        declare_use_hardware,
+        declare_fast_lio_config,
+        declare_fast_lio_config_path,
         unitree_driver,
         livox_driver,
         lidar_tf,

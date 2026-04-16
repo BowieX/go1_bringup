@@ -37,7 +37,7 @@
 
   <!-- 数据转换依赖 -->
   <exec_depend>pointcloud_to_laserscan</exec_depend>
-  
+
   <!-- TF 和可视化 -->
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>rviz2</exec_depend>

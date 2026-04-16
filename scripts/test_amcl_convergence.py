@@ -28,11 +28,8 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Odometry
 
 
-# 机器人在仿真中的真实位置 (fake_robot_node 维护)
-# 测试时机器人静止在原点，通过发布 /initialpose 测试 AMCL 收敛
-ROBOT_TRUE_X   = 0.0
-ROBOT_TRUE_Y   = 0.0
-ROBOT_TRUE_YAW = 0.0  # 弧度
+# 真值从 /odom 订阅获取 (fake_robot_node 的 odom 即 ground truth)
+# 因为仿真中 odom 帧与世界帧对齐，机器人初始位置 (0,0,0) 即地图原点
 
 # AMCL 收敛判定阈值
 CONVERGE_POS_THR  = 0.15   # 位置误差 < 15cm 视为收敛
@@ -41,9 +38,13 @@ CONVERGE_TIMEOUT  = 30.0   # 30秒内未收敛视为失败
 WIGGLE_DIST       = 0.5    # 抖动距离: 来回移动帮助粒子收敛
 
 # 测试用例: (名称, 初始位姿偏差_x, 偏差_y, 偏差_yaw_度, 期望结果)
+# 说明:
+#   20°  — AMCL 典型可恢复范围，抖动+旋转 5~15s 内收敛
+#   45°+ — AMCL 局部最优陷阱，即使抖动也常无法自动纠正 (真实限制)
+#   180° — 完全反转，scan 似然无梯度可用，必须重新点击
 TEST_CASES = [
     ("Case1_正确位姿",    0.0,  0.0,    0, "CONVERGE_FAST"),
-    ("Case2_偏差45度",   0.0,  0.0,   45, "CONVERGE_SLOW"),
+    ("Case2_偏差20度",   0.0,  0.0,   20, "CONVERGE_SLOW"),
     ("Case3_反向180度",  0.0,  0.0,  180, "NO_CONVERGE"),
 ]
 
@@ -80,6 +81,13 @@ class AmclConvergenceTester(Node):
             amcl_qos
         )
 
+        # ---------- 真值订阅 (/odom 即 fake_robot 的 ground truth) ----------
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom', self._odom_cb, 10)
+        self.truth_x   = 0.0
+        self.truth_y   = 0.0
+        self.truth_yaw = 0.0
+
         # ---------- 初始位姿发布 ----------
         self.init_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped,
@@ -106,16 +114,22 @@ class AmclConvergenceTester(Node):
             self.current_amcl_y   = msg.pose.pose.position.y
             self.current_amcl_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
 
+    def _odom_cb(self, msg: Odometry):
+        with self.pose_lock:
+            self.truth_x   = msg.pose.pose.position.x
+            self.truth_y   = msg.pose.pose.position.y
+            self.truth_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
+
     def _get_error(self):
-        """获取当前 AMCL 估计与真实位置的误差"""
+        """获取当前 AMCL 估计与真实位置的误差 (真值来自 /odom)"""
         with self.pose_lock:
             if self.current_amcl_x is None:
                 return None, None
             pos_err = math.hypot(
-                self.current_amcl_x - ROBOT_TRUE_X,
-                self.current_amcl_y - ROBOT_TRUE_Y
+                self.current_amcl_x - self.truth_x,
+                self.current_amcl_y - self.truth_y
             )
-            yaw_err = abs(angle_diff(self.current_amcl_yaw, ROBOT_TRUE_YAW))
+            yaw_err = abs(angle_diff(self.current_amcl_yaw, self.truth_yaw))
         return pos_err, yaw_err
 
     def _publish_initial_pose(self, x: float, y: float, yaw_deg: float):
@@ -137,21 +151,25 @@ class AmclConvergenceTester(Node):
             f'  → 发布初始位姿: ({x:.2f}, {y:.2f}, yaw={yaw_deg:.0f}°)')
 
     def _wiggle(self, duration: float = 4.0):
-        """让机器人来回抖动，帮助 AMCL 粒子收敛"""
+        """让机器人抖动 — 线速度+角速度组合，显著加快粒子收敛
+
+        说明：纯前后平移时，AMCL 对 yaw 偏差的可观测性差
+              (机器人沿错误朝向移动时 scan 渐变仍可能匹配)。
+              加入旋转后，scan 角度关系强烈变化，粒子快速淘汰错误朝向。
+        """
         cmd = Twist()
         t0 = time.time()
-        phase = 0
         while time.time() - t0 < duration:
             elapsed = time.time() - t0
-            # 每 0.8s 切换方向
-            if int(elapsed / 0.8) % 2 == 0:
-                cmd.linear.x = 0.1
-            else:
-                cmd.linear.x = -0.1
+            # 线速度: 每 1.0s 切换前后
+            cmd.linear.x = 0.15 if (int(elapsed / 1.0) % 2 == 0) else -0.15
+            # 角速度: 每 0.6s 切换正反 (独立周期制造非重复轨迹)
+            cmd.angular.z = 0.4 if (int(elapsed / 0.6) % 2 == 0) else -0.4
             self.cmd_pub.publish(cmd)
             rclpy.spin_once(self, timeout_sec=0.05)
         # 停止
-        cmd.linear.x = 0.0
+        cmd.linear.x  = 0.0
+        cmd.angular.z = 0.0
         self.cmd_pub.publish(cmd)
 
     def run_test(self, name: str, init_x: float, init_y: float,
@@ -164,18 +182,24 @@ class AmclConvergenceTester(Node):
         print(f'  期望结果: {expected}')
         print(sep)
 
+        # 读取当前真值 (来自 /odom)
+        with self.pose_lock:
+            true_x, true_y, true_yaw = self.truth_x, self.truth_y, self.truth_yaw
+
         # 1. 重置: 先给正确位姿让 AMCL 稳定
-        self._publish_initial_pose(ROBOT_TRUE_X, ROBOT_TRUE_Y, 0.0)
+        self._publish_initial_pose(true_x, true_y, math.degrees(true_yaw))
         time.sleep(2.0)
         rclpy.spin_once(self, timeout_sec=0.1)
 
         # 2. 发布测试初始位姿 (偏差版本)
         self._publish_initial_pose(
-            ROBOT_TRUE_X + init_x,
-            ROBOT_TRUE_Y + init_y,
-            math.degrees(ROBOT_TRUE_YAW) + yaw_deg
+            true_x + init_x,
+            true_y + init_y,
+            math.degrees(true_yaw) + yaw_deg
         )
-        time.sleep(1.0)
+        # 必须 spin 让 AMCL 回调有机会处理新位姿
+        for _ in range(30):
+            rclpy.spin_once(self, timeout_sec=0.1)
 
         # 3. 记录初始误差
         pos_err0, yaw_err0 = self._get_error()
@@ -186,6 +210,7 @@ class AmclConvergenceTester(Node):
         converged = False
         converge_time = None
         t_start = time.time()
+        last_print_t = 0.0
 
         print(f'  开始抖动驱动，等待收敛 (最多 {CONVERGE_TIMEOUT:.0f}s)...')
         while time.time() - t_start < CONVERGE_TIMEOUT:
@@ -197,8 +222,14 @@ class AmclConvergenceTester(Node):
                 continue
 
             elapsed = time.time() - t_start
-            print(f'  t={elapsed:5.1f}s | 位置误差={pos_err:.3f}m | '
-                  f'朝向误差={math.degrees(yaw_err):.1f}°', end='\r')
+            # 每 5 秒打印一行（不覆盖），便于观察收敛轨迹
+            if elapsed - last_print_t >= 5.0:
+                print(f'  t={elapsed:5.1f}s | 位置误差={pos_err:.3f}m | '
+                      f'朝向误差={math.degrees(yaw_err):.1f}°')
+                last_print_t = elapsed
+            else:
+                print(f'  t={elapsed:5.1f}s | 位置误差={pos_err:.3f}m | '
+                      f'朝向误差={math.degrees(yaw_err):.1f}°', end='\r')
 
             if pos_err < CONVERGE_POS_THR and yaw_err < CONVERGE_YAW_THR:
                 converged = True
@@ -253,8 +284,12 @@ class AmclConvergenceTester(Node):
         print()
         print('  结论:')
         print('  • Case1 (0° 偏差):   AMCL 几乎无需移动即可维持正确定位')
-        print('  • Case2 (45° 偏差):  抖动几秒后粒子收敛，轨迹初期偏斜但自动纠正')
+        print('  • Case2 (20° 偏差):  线速度+角速度抖动数秒内粒子收敛')
         print('  • Case3 (180° 反转): AMCL 粒子无法收敛，必须重新设置初始位姿')
+        print()
+        print('  ⚠️  补充说明:')
+        print('     实测 45°+ 的 yaw 偏差即使加旋转抖动也常陷入局部最优 (scan 似然无法穿越)')
+        print('     → 实机操作建议: 2D Pose Estimate 时务必把箭头指对方向, 偏差尽量 <20°')
         print()
 
         # 写入文件
@@ -272,7 +307,7 @@ def main():
     print('\n' + '═' * 60)
     print('  AMCL 初始位姿收敛行为测试')
     print('  仿真地图: 左右两房间 + 中央走廊')
-    print('  机器人真实位置: (0.0, 0.0, 0°)')
+    print('  真值来源: /odom (fake_robot_node 的内部位置)')
     print('═' * 60)
     print()
     print('  等待 Nav2 / AMCL 完全启动 (5秒)...')

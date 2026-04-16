@@ -30,11 +30,17 @@ from nav_msgs.msg import Odometry, Path
 from nav2_msgs.action import NavigateToPose
 
 
+# 测试起始位置：上方中央走廊（从此点可连通左右房间）
+# 注: sim_test_map 的上下两半在 0.25m 膨胀下不互通 (门洞太窄)，
+#     因此全部目标都选在上半部分 (左右房间 + 中央)
+START_POSE = (0.0, 0.5, 0.0)
+
 # 测试目标点: (名称, x, y, yaw_deg, 期望结果)
+# 已通过 BFS 验证: start 与所有 goal 在 0.25m 膨胀下互通
 NAV_GOALS = [
-    ("Goal1_左房间",  -3.0,  1.0,   0.0, "SUCCESS"),
-    ("Goal2_右房间",   3.0,  1.0,   0.0, "SUCCESS"),
-    ("Goal3_下方区域", 0.0, -2.5,   0.0, "SUCCESS"),
+    ("Goal1_左房间",  -2.0,  1.5,   0.0, "SUCCESS"),
+    ("Goal2_右房间",   2.0,  1.5,   0.0, "SUCCESS"),
+    ("Goal3_右上角",   3.5,  2.5,   0.0, "SUCCESS"),
 ]
 
 # 每个 goal 的超时时间
@@ -53,6 +59,14 @@ class Nav2NavigationTester(Node):
 
         # ---------- NavigateToPose Action Client ----------
         self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
+        # ---------- /teleport 发布 + /initialpose 发布 (测试前重置机器人) ----------
+        self.teleport_pub = self.create_publisher(PoseStamped, '/teleport', 10)
+        init_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL, depth=1)
+        self.init_pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', init_qos)
 
         # ---------- 当前位置 (来自 AMCL 估计) ----------
         amcl_qos = QoSProfile(
@@ -78,6 +92,26 @@ class Nav2NavigationTester(Node):
 
         self.get_logger().info('Nav2 导航测试器已启动')
 
+    def reset_robot(self, x: float = 0.0, y: float = 0.0, yaw_deg: float = 0.0):
+        """把机器人瞬移回 (x,y,yaw) 并同步重置 AMCL 初始位姿。
+        用于测试开始前清除前一次测试的残留状态。"""
+        # 1. 发布 /teleport 让 fake_robot_node 瞬移
+        tp = self._make_goal_pose(x, y, yaw_deg)
+        self.teleport_pub.publish(tp)
+        # 2. 发布 /initialpose 同步 AMCL 粒子分布
+        ip = PoseWithCovarianceStamped()
+        ip.header.stamp    = self.get_clock().now().to_msg()
+        ip.header.frame_id = 'map'
+        ip.pose.pose = tp.pose
+        ip.pose.covariance[0]  = 0.0625   # x σ=0.25
+        ip.pose.covariance[7]  = 0.0625   # y σ=0.25
+        ip.pose.covariance[35] = 0.0685   # yaw σ≈15°
+        self.init_pose_pub.publish(ip)
+        self.get_logger().info(f'已重置机器人到 ({x:.2f}, {y:.2f}, yaw={yaw_deg:.0f}°)')
+        # 3. 等待 TF 和 AMCL 收敛
+        for _ in range(30):
+            rclpy.spin_once(self, timeout_sec=0.1)
+
     def _pose_cb(self, msg: PoseWithCovarianceStamped):
         self.current_x   = msg.pose.pose.position.x
         self.current_y   = msg.pose.pose.position.y
@@ -92,7 +126,9 @@ class Nav2NavigationTester(Node):
             dx = msg.poses[i].pose.position.x - msg.poses[i-1].pose.position.x
             dy = msg.poses[i].pose.position.y - msg.poses[i-1].pose.position.y
             length += math.hypot(dx, dy)
-        self.plan_length = length
+        # 第一次收到规划路径时记录完整长度，后续重规划只更新计数
+        if self.replan_count == 0:
+            self.plan_length = length
         self.replan_count += 1
 
     def _make_goal_pose(self, x: float, y: float, yaw_deg: float) -> PoseStamped:
@@ -239,6 +275,14 @@ def main():
     print()
     print('  等待 Nav2 启动并完成初始定位 (8秒)...')
     for _ in range(80):
+        rclpy.spin_once(tester, timeout_sec=0.1)
+
+    # 重置机器人到安全起点 (离墙 >0.55m, 避开膨胀代价区)
+    sx, sy, syaw = START_POSE
+    print(f'  重置机器人到起点 ({sx:.1f}, {sy:.1f})...')
+    tester.reset_robot(sx, sy, syaw)
+    time.sleep(2.0)
+    for _ in range(20):
         rclpy.spin_once(tester, timeout_sec=0.1)
 
     # 依次测试所有目标

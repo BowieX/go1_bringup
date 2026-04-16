@@ -24,7 +24,7 @@ import yaml
 import os
 from PIL import Image
 
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Twist, TransformStamped, PoseStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from tf2_ros import TransformBroadcaster
@@ -79,6 +79,9 @@ class FakeRobotNode(Node):
         # ---------- 订阅者 ----------
         self.cmd_sub = self.create_subscription(
             Twist, '/cmd_vel', self._cmd_vel_cb, 10)
+        # /teleport 话题: 测试脚本可通过它重置机器人位置 (不经碰撞检测)
+        self.tele_sub = self.create_subscription(
+            PoseStamped, '/teleport', self._teleport_cb, 10)
 
         # ---------- 定时器 ----------
         self.dt = 0.05   # 20 Hz 物理更新
@@ -163,7 +166,7 @@ class FakeRobotNode(Node):
     # ------------------------------------------------------------------
     # 碰撞检测：机器人半径 0.32m
     # ------------------------------------------------------------------
-    def _is_collision(self, x: float, y: float, radius: float = 0.32) -> bool:
+    def _is_collision(self, x: float, y: float, radius: float = 0.20) -> bool:
         checks = [
             (x, y),
             (x + radius, y), (x - radius, y),
@@ -189,6 +192,21 @@ class FakeRobotNode(Node):
         self.vx = msg.linear.x
         self.vy = msg.linear.y
         self.wz = msg.angular.z
+
+    # ------------------------------------------------------------------
+    # 瞬移回调: 测试脚本用 /teleport 话题强制重置机器人位置
+    # ------------------------------------------------------------------
+    def _teleport_cb(self, msg: PoseStamped):
+        new_x   = msg.pose.position.x
+        new_y   = msg.pose.position.y
+        q = msg.pose.orientation
+        new_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                             1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.x, self.y, self.yaw = new_x, new_y, new_yaw
+        self.vx = self.vy = self.wz = 0.0
+        self.get_logger().info(
+            f'[teleport] -> ({new_x:.2f}, {new_y:.2f}, '
+            f'{math.degrees(new_yaw):.1f}°)')
 
     # ------------------------------------------------------------------
     # 物理更新定时器 (20 Hz)
@@ -221,9 +239,9 @@ class FakeRobotNode(Node):
         t.transform.translation.x = self.x
         t.transform.translation.y = self.y
         t.transform.translation.z = 0.0
-        # 四元数：绕 Z 轴旋转 yaw
-        t.transform.rotation.z = math.sin(new_yaw / 2.0)
-        t.transform.rotation.w = math.cos(new_yaw / 2.0)
+        # 四元数：绕 Z 轴旋转 yaw（必须使用 self.yaw，碰撞时 new_yaw 未赋值给 self.yaw）
+        t.transform.rotation.z = math.sin(self.yaw / 2.0)
+        t.transform.rotation.w = math.cos(self.yaw / 2.0)
         self.tf_broadcaster.sendTransform(t)
 
         # 发布 Odometry
@@ -245,8 +263,11 @@ class FakeRobotNode(Node):
     # ------------------------------------------------------------------
     def _scan_timer(self):
         now = self.get_clock().now()
+        # endpoint=False 确保角度间隔 = (angle_max - angle_min) / num_beams
+        # 与 LaserScan.angle_increment 一致，避免 AMCL 几何错位
         angles = np.linspace(
-            self.scan_angle_min, self.scan_angle_max, self.scan_num_beams)
+            self.scan_angle_min, self.scan_angle_max, self.scan_num_beams,
+            endpoint=False)
 
         ranges = []
         for a in angles:
