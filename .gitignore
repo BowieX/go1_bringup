@@ -1,2 +1,10 @@
 __pycache__/
 *.pyc
+
+# 个人学术记录, 不进入公开仓库
+docs/指导记录.txt
+
+# 另一路线 (FAST-LIO + slam_toolbox 实时预览) 的建图方案, 本会话未验证, 暂存本地
+launch/go1_mapping_record.launch.py
+config/go1_mapping_record.rviz
+config/slam_toolbox_mapping.yaml

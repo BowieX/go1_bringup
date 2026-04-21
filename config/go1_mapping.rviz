@@ -6,7 +6,6 @@ Panels:
       Expanded:
         - /Global Options1
         - /LaserScan1
-        - /Map1
         - /TF1
         - /RegisteredCloud1
       Splitter Ratio: 0.5
@@ -71,28 +70,6 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Queue Size: 10
-      Value: true
-
-    # --- 占据栅格地图 ---
-    - Class: rviz_default_plugins/Map
-      Name: Map
-      Enabled: true
-      Topic:
-        Value: /map
-        Depth: 1
-        Durability Policy: Transient Local
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-      Alpha: 0.7
-      Color Scheme: map
-      Draw Behind: true
-      Update Topic:
-        Value: /map_updates
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-      Use Timestamp: false
       Value: true
 
     # --- TF 坐标系 ---
@@ -186,7 +163,8 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: map
+    # 路线 B: 不再运行 slam_toolbox, 没有 map 帧; FAST-LIO 以 camera_init 为全局帧
+    Fixed Frame: camera_init
     Frame Rate: 30
   Name: root
   Tools:

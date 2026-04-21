@@ -80,7 +80,10 @@ controller_server:
       plugin: "teb_local_planner::TebLocalPlannerROS"
 
       # === 轨迹优化参数 ===
-      teb_autosize: true              # 自动调整时间分辨率
+      # teb_autosize: 在此 teb_local_planner 分支里声明为 double (而非 bool)，
+      # 作为"时间分辨率的放大因子"：0.0=禁用自动调整, 1.0=默认启用
+      # 传 true/false 会被 ROS2 参数系统拒绝并导致 controller_server lifecycle configure 失败
+      teb_autosize: 1.0               # 自动调整时间分辨率 (1.0 = 启用)
       dt_ref: 0.3                     # 期望的轨迹时间分辨率 (秒)
       dt_hysteresis: 0.1              # 时间分辨率滞环阈值
       max_samples: 500                # 最大采样数
@@ -128,9 +131,10 @@ controller_server:
       optimization_activate: true
       optimization_verbose: false
       penalty_epsilon: 0.1
-      # obstacle_cost_exponent=1 线性惩罚 (默认)；=4 四次方激进避障但易卡死
-      # 首次部署用 1，若出现"擦碰障碍"再调到 2-4
-      obstacle_cost_exponent: 1
+      # obstacle_cost_exponent=1.0 线性惩罚 (默认)；=4.0 四次方激进避障但易卡死
+      # 首次部署用 1.0，若出现"擦碰障碍"再调到 2.0-4.0
+      # 必须写为浮点 (1.0)，TEB 声明此参数为 double；写成 1 会被拒绝
+      obstacle_cost_exponent: 1.0
       weight_max_vel_x: 2.0
       weight_max_vel_y: 2.0           # 全向: Y轴速度权重
       weight_max_vel_theta: 1.0

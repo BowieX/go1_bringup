@@ -48,9 +48,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='body_to_lidar_tf',
         arguments=[
-            '--x', '0.10',
-            '--y', '0.00',
-            '--z', '0.15',
+            '--x', '0.008',
+            '--y', '0.000',
+            '--z', '0.2742',
             '--yaw',   '0.0',
             '--pitch', '0.0',
             '--roll',  '0.0',

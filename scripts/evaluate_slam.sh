@@ -23,6 +23,8 @@
 #   <dir>/traj_fastlio_baseline.txt   — 基线 FAST-LIO2 (关闭 odom 约束)
 #   <dir>/traj_fastlio_improved.txt   — 改进 FAST-LIO2 (开启 odom 约束)
 #   <dir>/geometry_constraints.csv    — 已知几何距离 (可选, 见下方格式说明)
+#   <dir>/fastlio_improved.log        — 改进版 FAST-LIO 终端日志 (可选, 用于退化触发率统计)
+#                                       生成方法: 在 §7.4 回放时 `2>&1 | tee <dir>/fastlio_improved.log`
 #
 # geometry_constraints.csv 格式 (无表头):
 #   标签, 实测距离(m), 起点x, 起点y, 终点x, 终点y
@@ -46,6 +48,7 @@ mkdir -p "${RESULTS_DIR}"
 BASELINE="${TRAJ_DIR}/traj_fastlio_baseline.txt"
 IMPROVED="${TRAJ_DIR}/traj_fastlio_improved.txt"
 GEOMETRY="${TRAJ_DIR}/geometry_constraints.csv"
+IMPROVED_LOG="${TRAJ_DIR}/fastlio_improved.log"
 
 echo "=================================================="
 echo " SLAM 消融实验评估 (无动捕真值方案)"
@@ -189,7 +192,7 @@ except:
 # 阶段 1: 闭环漂移 (核心指标)
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "[1/4] 闭环漂移 (Loop Closure Drift)"
+echo "[1/5] 闭环漂移 (Loop Closure Drift)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 DRIFT_BASELINE=$(calc_loop_closure_drift "${BASELINE}")
@@ -218,7 +221,7 @@ echo ""
 # 阶段 2: 已知几何误差 (需要 geometry_constraints.csv)
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "[2/4] 已知几何距离误差 (Known Geometry Error)"
+echo "[2/5] 已知几何距离误差 (Known Geometry Error)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 if [ -f "${GEOMETRY}" ]; then
@@ -242,7 +245,7 @@ echo ""
 # 阶段 3: 轨迹对比图 (evo_traj)
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "[3/4] 轨迹对比图 (Trajectory Comparison)"
+echo "[3/5] 轨迹对比图 (Trajectory Comparison)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 echo "  生成俯视轨迹对比图..."
@@ -256,7 +259,7 @@ echo ""
 # 阶段 4: 轨迹一致性 RPE (合理用法: 衡量两算法局部行为差异)
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "[4/4] 轨迹一致性 RPE (Relative Pose Error)"
+echo "[4/5] 轨迹一致性 RPE (Relative Pose Error)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  说明: RPE 衡量两条轨迹在局部段内的运动差异。"
 echo "        在正常场景中 RPE 应很小 (两算法行为一致);"
@@ -271,6 +274,56 @@ evo_rpe tum "${BASELINE}" "${IMPROVED}" -va \
 RPE_RMSE="N/A"
 if [ -f "${RESULTS_DIR}/rpe_consistency.zip" ]; then
     RPE_RMSE=$(extract_evo_rmse "${RESULTS_DIR}/rpe_consistency.zip")
+fi
+echo ""
+
+# ==================================================================
+# 阶段 5: 退化触发率 (仅改进版; 需要 fastlio_improved.log)
+#
+# 关键验证指标: 若触发率为 0, 说明退化阈值过严(feat_threshold 太低 /
+# residual_threshold 太高), 改进版实际上从未激活里程计强约束, 此时
+# 与基线的漂移差距几乎全部来自"常开弱约束", 论文立论会站不住脚.
+# 期望值: 走廊消融实验中 20%-60% 触发率为合理区间.
+# ==================================================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "[5/5] 退化触发率 (Degradation Trigger Rate)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+TRIGGER_RATE="N/A"
+DEGRADED_FRAMES="N/A"
+TOTAL_FRAMES="N/A"
+if [ -f "${IMPROVED_LOG}" ]; then
+    # 抓取最后一条 [OdomStat] 汇报行, 形如:
+    #   [OdomStat] degraded=123/456 (27.0%), feat_num=..., res_mean=...
+    LAST_STAT=$(grep '\[OdomStat\]' "${IMPROVED_LOG}" | tail -n 1)
+    if [ -n "${LAST_STAT}" ]; then
+        DEGRADED_FRAMES=$(echo "${LAST_STAT}" | sed -n 's/.*degraded=\([0-9]*\)\/[0-9]*.*/\1/p')
+        TOTAL_FRAMES=$(echo   "${LAST_STAT}" | sed -n 's/.*degraded=[0-9]*\/\([0-9]*\).*/\1/p')
+        TRIGGER_RATE=$(echo   "${LAST_STAT}" | sed -n 's/.*(\([0-9.]*\)%).*/\1/p')
+        echo "  最后一次汇报: ${LAST_STAT}"
+        echo "  退化帧 / 总约束帧 = ${DEGRADED_FRAMES} / ${TOTAL_FRAMES}"
+        echo "  触发率           = ${TRIGGER_RATE}%"
+        # 异常区间提示
+        python3 -c "
+rate = float('${TRIGGER_RATE}')
+if rate < 5.0:
+    print('  [WARN] 触发率过低 (<5%): 退化判据几乎没触发, 创新未生效')
+    print('         → 建议降低 feat_threshold 或 residual_threshold 后重跑')
+elif rate > 80.0:
+    print('  [WARN] 触发率过高 (>80%): 退化判据过于敏感, 几乎全程强约束')
+    print('         → 建议提高 feat_threshold 或 residual_threshold 后重跑')
+else:
+    print('  [OK]   触发率在合理区间 (5-80%)')
+" 2>/dev/null || true
+    else
+        echo "  [WARN] 日志中未找到 [OdomStat] 行"
+        echo "         请确认改进版用 odom_constraint:=true 启动, 且日志包含 RCLCPP_INFO 输出"
+    fi
+else
+    echo "  [跳过] 未找到 ${IMPROVED_LOG}"
+    echo "  生成方法: 在 §7.4 改进版回放时, 给 FAST-LIO 终端加 tee:"
+    echo "    ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true \\"
+    echo "        2>&1 | tee ${IMPROVED_LOG}"
 fi
 echo ""
 
@@ -296,12 +349,16 @@ i_rate = f'{float(i_drift)/float(i_len)*100:.2f}%' if i_drift != 'N/A' and i_len
 print(f\"{'漂移率 (漂移/总长)':<24s} | {b_rate:<14s} | {i_rate:<14s}\")
 "
 printf "%-24s | %-14s\n" "轨迹一致性 RPE RMSE (m)" "${RPE_RMSE}"
+printf "%-24s | %-14s\n" "退化触发率 (改进版)"    "${TRIGGER_RATE}%"
+printf "%-24s | %-14s\n" "退化帧/总帧 (改进版)"  "${DEGRADED_FRAMES}/${TOTAL_FRAMES}"
 
 echo ""
 echo "说明:"
 echo "  - 闭环漂移: 闭合回路首尾欧氏距离, 越小越好"
 echo "  - 漂移率: 闭环漂移/轨迹总长, 反映累积漂移速率"
 echo "  - RPE: 两条轨迹局部段运动差异, 退化段越大说明两种方法差异越大"
+echo "  - 退化触发率: 改进版运行期间 feat_num<阈值 或 res_mean>阈值 的帧占比"
+echo "                触发率=0% 意味创新未激活, 必须排查阈值"
 echo ""
 
 # 保存汇总到文件
@@ -316,6 +373,8 @@ SUMMARY_FILE="${RESULTS_DIR}/summary.txt"
     printf "%-24s | %-14s | %-14s\n" "闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
     printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
     printf "%-24s | %-14s\n" "轨迹一致性 RPE RMSE (m)" "${RPE_RMSE}"
+    printf "%-24s | %-14s\n" "退化触发率 (改进版)"    "${TRIGGER_RATE}%"
+    printf "%-24s | %-14s\n" "退化帧/总帧 (改进版)"  "${DEGRADED_FRAMES}/${TOTAL_FRAMES}"
 } > "${SUMMARY_FILE}"
 
 echo "=================================================="

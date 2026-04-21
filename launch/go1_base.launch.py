@@ -1,9 +1,11 @@
 # 文件路径: ~/go1_ws/src/go1_bringup/launch/go1_base.launch.py
 
 import os
+from datetime import datetime
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import ExecuteProcess, IncludeLaunchDescription, DeclareLaunchArgument, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
@@ -22,6 +24,21 @@ def generate_launch_description():
         'use_sim_time',
         default_value='false',
         description='是否使用仿真时钟 /clock (离线回放时设为 true)')
+
+    # ---------- rosbag 自动录制参数 ----------
+    # 每次启动实验都会在 bag_dir/<时间戳>/ 下生成一份 bag, 供离线回放与消融实验复用.
+    # 离线回放 (go1_replay.launch.py / use_sim_time:=true) 时必须手动关掉, 否则会递归录制旧数据.
+    record_bag = LaunchConfiguration('record_bag')
+    declare_record_bag = DeclareLaunchArgument(
+        'record_bag',
+        default_value='true',
+        description='是否自动 ros2 bag record 全部关键话题 (离线回放时建议 false)')
+
+    bag_dir = LaunchConfiguration('bag_dir')
+    declare_bag_dir = DeclareLaunchArgument(
+        'bag_dir',
+        default_value=os.path.join(os.path.expanduser('~'), 'go1_ws', 'bags'),
+        description='bag 输出根目录, 实际保存路径为 <bag_dir>/<YYYY-MM-DD_HH-MM-SS>')
 
     # ---------------- 路径获取 ----------------
     unitree_pkg = get_package_share_directory('unitree_ros')
@@ -53,23 +70,22 @@ def generate_launch_description():
     # ---------------- 2. TF 变换 ----------------
     # 静态 TF: body -> livox_frame (LiDAR 相对机体的安装外参)
     #
-    # ⚠️ 实机部署必须重新测量以下 6 个参数！ (见实验手册 §4.5 LiDAR 外参测量)
-    #    body      = 机器狗腰部几何中心 (四腿投影中心)，FAST-LIO 位姿输出帧
-    #    livox_frame = MID-360S 外壳几何中心，LiDAR 数据帧
+    # 实测外参 (2026-04-17，见实验手册 §4.5):
+    #    body        = 机器狗腰部几何中心 (四腿投影中心)，FAST-LIO 位姿输出帧
+    #    livox_frame = MID-360S 外壳底部 (Livox 手册标注的传感器坐标系原点)
     #    坐标系: X 前、Y 左、Z 上 (ROS REP-103)
     #    x 正值 = LiDAR 在机体前方；y 正值 = 在左侧；z 正值 = 在上方
-    #    精度要求: x/y 误差 <2cm，z 误差 <1cm
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='body_to_lidar_tf',
         arguments=[
-            '--x', '0.10',     # TODO(实机): LiDAR 相对 body 的前后偏移 (m)
-            '--y', '0.00',     # TODO(实机): 左右偏移 (m)
-            '--z', '0.15',     # TODO(实机): 上下偏移 (m)
-            '--yaw',   '0.0',  # TODO(实机): 安装偏角 (rad, 绕 Z)
-            '--pitch', '0.0',  # TODO(实机): 安装俯仰 (rad, 绕 Y，向下倾为负)
-            '--roll',  '0.0',  # TODO(实机): 安装滚转 (rad, 绕 X)
+            '--x', '0.008',    # LiDAR 在机身前方 8 mm
+            '--y', '0.000',    # 居中，无左右偏移
+            '--z', '0.2742',   # LiDAR 外壳底部比腰部中心高 274.2 mm
+            '--yaw',   '0.0',  # 安装水平，无 yaw 偏角
+            '--pitch', '0.0',  # 安装水平，无 pitch
+            '--roll',  '0.0',  # 安装水平，无 roll
             '--frame-id', 'body',
             '--child-frame-id', 'livox_frame'
         ],
@@ -140,14 +156,43 @@ def generate_launch_description():
         parameters=[pc2scan_config, {'use_sim_time': use_sim_time}]
     )
 
+    # ---------------- 6. rosbag 自动录制 ----------------
+    # 关键原始话题全量录制, 供后续消融实验回放 (见 go1_replay.launch.py).
+    # 话题选择依据: FAST-LIO 需要 /livox/{lidar,imu}; robot_localization 需要 /odom /imu;
+    #              /tf_static 让外参在离线重建时可复用; /cmd_vel 用于导航 trial 分析;
+    #              /Odometry 录制算法输出, 便于无需重跑 FAST-LIO 即可核对轨迹.
+    # 注: 不录 /tf (动态 TF 在回放时会由 FAST-LIO 重新生成, 录了也会冲突).
+    bag_stamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    bag_output = [bag_dir, '/', bag_stamp]
+    bag_topics = [
+        '/livox/lidar', '/livox/imu',
+        '/odom', '/imu',
+        '/tf_static',
+        '/cmd_vel',
+        '/Odometry',
+    ]
+    bag_record = ExecuteProcess(
+        cmd=['ros2', 'bag', 'record', '-o', *bag_output, *bag_topics],
+        output='screen',
+        condition=IfCondition(record_bag),
+    )
+    bag_log = LogInfo(
+        msg=['[go1_base] rosbag recording to: ', *bag_output],
+        condition=IfCondition(record_bag),
+    )
+
     return LaunchDescription([
         declare_use_odom_fusion,
         declare_use_sim_time,
+        declare_record_bag,
+        declare_bag_dir,
+        bag_log,
         unitree_driver,
         livox_driver,
         lidar_tf,
         unitree_base_to_body_tf,
         fast_lio_node,
         ekf_node,
-        pointcloud_to_laserscan_node
+        pointcloud_to_laserscan_node,
+        bag_record,
     ])

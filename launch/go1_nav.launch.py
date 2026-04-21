@@ -21,6 +21,8 @@ def generate_launch_description():
     map_yaml_file = LaunchConfiguration('map')
     params_file = LaunchConfiguration('params_file')
     use_odom_fusion = LaunchConfiguration('use_odom_fusion')
+    record_bag = LaunchConfiguration('record_bag')
+    bag_dir = LaunchConfiguration('bag_dir')
 
     declare_map = DeclareLaunchArgument(
         'map',
@@ -37,12 +39,26 @@ def generate_launch_description():
         default_value='true',
         description='是否启动 robot_localization EKF 融合节点')
 
+    declare_record_bag = DeclareLaunchArgument(
+        'record_bag',
+        default_value='true',
+        description='是否自动 rosbag 录制本次实验 (转发给 go1_base)')
+
+    declare_bag_dir = DeclareLaunchArgument(
+        'bag_dir',
+        default_value=os.path.join(os.path.expanduser('~'), 'go1_ws', 'bags', 'nav'),
+        description='bag 输出根目录 (建议与 mapping 分开, 默认 ~/go1_ws/bags/nav)')
+
     # 1. 启动底层 (驱动 + 里程计) - 注意：这里不带 SLAM
     base_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(go1_bringup_pkg, 'launch', 'go1_base.launch.py')
         ),
-        launch_arguments={'use_odom_fusion': use_odom_fusion}.items()
+        launch_arguments={
+            'use_odom_fusion': use_odom_fusion,
+            'record_bag': record_bag,
+            'bag_dir': bag_dir,
+        }.items()
     )
 
     # 2. 启动 Nav2 (定位 + 规划 + 控制)
@@ -73,6 +89,8 @@ def generate_launch_description():
         declare_map,
         declare_params,
         declare_use_odom_fusion,
+        declare_record_bag,
+        declare_bag_dir,
         base_launch,
         nav2_launch,
         rviz_node

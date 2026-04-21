@@ -16,8 +16,9 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml') + glob('config/*.rviz')),
         # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
-        # 评估脚本
-        (os.path.join('share', package_name, 'scripts'), glob('scripts/*')),
+        # 评估脚本 (排除 __pycache__ 目录，setuptools 不支持拷贝目录)
+        (os.path.join('share', package_name, 'scripts'),
+            [f for f in glob('scripts/*') if os.path.isfile(f)]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

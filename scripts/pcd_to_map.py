@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""
+pcd_to_map.py — 将 FAST-LIO 累积的 3D 点云切片为 Nav2 可用的 2D 占据栅格地图。
+
+用法:
+    python3 pcd_to_map.py <input.pcd> <output_dir> <map_name> \
+        [--z-min 0.05] [--z-max 0.25] [--resolution 0.05] \
+        [--hit-threshold 2] [--padding 0.5]
+
+输出:
+    <output_dir>/<map_name>.pgm   # P5 灰度图, 0=障碍, 254=空闲, 205=未知
+    <output_dir>/<map_name>.yaml  # Nav2 map_server 标准格式
+
+设计动机:
+    FAST-LIO 3D 建图 (带回环一致的 ikd-Tree 子地图) 质量极高，
+    但 slam_toolbox 2D 扫描匹配在 Go1 颠簸 + 长廊退化场景下容易累计角度误差。
+    直接离线切片 PCD 生成静态栅格地图，可避开 2D SLAM 的弱点。
+
+零依赖:
+    只需 numpy, 不依赖 open3d / pypcd / pcl (Jetson 上 pip 安装成本高)。
+    手写 PCD 二进制 header 解析。
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+import numpy as np
+
+
+# ============================================================================
+# PCD 二进制解析器 (PCL 官方格式, 见 https://pointclouds.org/documentation/tutorials/pcd_file_format.html)
+# ============================================================================
+
+def parse_pcd_header(f) -> dict:
+    """读取 PCD 文本 header, 返回字段字典. 文件游标会停在 DATA 行的下一字节."""
+    header: dict = {}
+    while True:
+        line = f.readline()
+        if not line:
+            raise ValueError("PCD header 结束前文件就 EOF")
+        line = line.decode("ascii", errors="replace").strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split()
+        key = tokens[0].upper()
+        vals = tokens[1:]
+        if key == "FIELDS":
+            header["fields"] = vals
+        elif key == "SIZE":
+            header["size"] = [int(v) for v in vals]
+        elif key == "TYPE":
+            header["type"] = vals
+        elif key == "COUNT":
+            header["count"] = [int(v) for v in vals]
+        elif key == "WIDTH":
+            header["width"] = int(vals[0])
+        elif key == "HEIGHT":
+            header["height"] = int(vals[0])
+        elif key == "POINTS":
+            header["points"] = int(vals[0])
+        elif key == "DATA":
+            header["data"] = vals[0].lower()
+            break
+    return header
+
+
+def pcd_type_to_numpy(t: str, size: int) -> str:
+    """PCD TYPE/SIZE 转 numpy dtype 字符串."""
+    m = {"F": "f", "U": "u", "I": "i"}
+    if t not in m:
+        raise ValueError(f"未知的 PCD TYPE: {t}")
+    return f"<{m[t]}{size}"
+
+
+def load_pcd_xyz(path: Path) -> np.ndarray:
+    """加载 PCD 文件, 只返回 (N, 3) 的 xyz float32 数组.
+
+    支持 DATA binary; ASCII 未实现 (FAST-LIO 始终输出 binary, 无需浪费代码)."""
+    with open(path, "rb") as f:
+        header = parse_pcd_header(f)
+        if header["data"] != "binary":
+            raise NotImplementedError(f"只支持 DATA binary, 当前是 {header['data']}")
+        if "x" not in header["fields"] or "y" not in header["fields"] or "z" not in header["fields"]:
+            raise ValueError(f"PCD 字段缺失 xyz: {header['fields']}")
+        # 构造 structured dtype, 精确匹配每个字段的 type/size/count
+        dtype_fields = []
+        for name, sz, tp, cnt in zip(header["fields"], header["size"], header["type"], header["count"]):
+            base = pcd_type_to_numpy(tp, sz)
+            if cnt == 1:
+                dtype_fields.append((name, base))
+            else:
+                dtype_fields.append((name, base, (cnt,)))
+        dtype = np.dtype(dtype_fields)
+        n = header["points"]
+        raw = np.frombuffer(f.read(n * dtype.itemsize), dtype=dtype, count=n)
+        # 只抽取 xyz, 丢弃 intensity/normal 等, 节省内存
+        xyz = np.stack([raw["x"], raw["y"], raw["z"]], axis=1).astype(np.float32, copy=False)
+        return xyz
+
+
+# ============================================================================
+# 切片 + 栅格化
+# ============================================================================
+
+def slice_and_rasterize(
+    xyz: np.ndarray,
+    z_min: float,
+    z_max: float,
+    resolution: float,
+    hit_threshold: int,
+    padding: float,
+) -> tuple[np.ndarray, float, float]:
+    """Z 切片 -> 2D 栅格化 -> 返回 (grid, origin_x, origin_y).
+
+    grid 语义: 0=未知, 1=空闲(ground-plane 扫过但无命中), 2=占据(命中数 >= hit_threshold).
+
+    核心思路:
+      1. Z 切片: 只保留 z ∈ [z_min, z_max] 的点, 这些点落在机器人碰撞高度内,
+         即 Nav2 关心的障碍物层.
+      2. 命中计数: 在 XY 平面用 resolution 栅格累加, 超阈值则标为占据.
+      3. 空闲区域: 此处采用"简化版" - 凡是在 bbox 内、未被命中的格子全部标空闲.
+         真正的 raytracing (光追) 需要传感器位姿序列, 离线 PCD 里已丢失, 所以只能近似.
+         对 Nav2 规划足够 (空闲区域稍微夸大不影响避障, inflation layer 会修正).
+    """
+    # Z 切片
+    z = xyz[:, 2]
+    mask = (z >= z_min) & (z <= z_max)
+    pts_sliced = xyz[mask]
+    if pts_sliced.size == 0:
+        raise RuntimeError(f"Z 切片后无点! 检查 z-min/z-max (当前 [{z_min}, {z_max}])")
+
+    # XY bbox: 用全部切片点算范围, 四周留 padding 米
+    x_min = float(pts_sliced[:, 0].min()) - padding
+    x_max = float(pts_sliced[:, 0].max()) + padding
+    y_min = float(pts_sliced[:, 1].min()) - padding
+    y_max = float(pts_sliced[:, 1].max()) + padding
+
+    # 栅格尺寸: Nav2 / map_server 要求 width=列数(X 方向), height=行数(Y 方向)
+    # pgm 图像坐标: 第 0 行在图像最上方对应 y_max, 最后一行对应 y_min
+    width = int(np.ceil((x_max - x_min) / resolution))
+    height = int(np.ceil((y_max - y_min) / resolution))
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"栅格尺寸非法 {width}x{height}")
+
+    # 命中计数: 把切片点的 (x,y) 转为 (col, row) 索引, 用 np.add.at 累加
+    col = np.floor((pts_sliced[:, 0] - x_min) / resolution).astype(np.int32)
+    # y 方向翻转: pgm 图像顶部是 y_max
+    row = np.floor((y_max - pts_sliced[:, 1]) / resolution).astype(np.int32)
+    # 越界保护 (bbox 已含 padding, 理论上不会出, 但防御性裁剪)
+    col = np.clip(col, 0, width - 1)
+    row = np.clip(row, 0, height - 1)
+
+    hits = np.zeros((height, width), dtype=np.int32)
+    np.add.at(hits, (row, col), 1)
+
+    # 生成 occupancy grid: 0=未知, 1=空闲, 2=占据
+    grid = np.zeros((height, width), dtype=np.uint8)
+    # 先把 bbox 内所有非命中格子标为空闲 (简化: 不做真实 raytracing)
+    grid[:] = 1  # 全部先假设空闲
+    # 命中达阈值的格子标占据
+    grid[hits >= hit_threshold] = 2
+    # 命中数非零但不足阈值的格子: 降噪 -> 保持空闲 (即噪点不影响地图)
+
+    # origin 遵循 Nav2 约定: 图像左下角在世界坐标 (origin_x, origin_y, 0)
+    # 图像左下角对应 (x_min, y_min)
+    return grid, x_min, y_min
+
+
+# ============================================================================
+# pgm / yaml 输出 (Nav2 map_server 兼容)
+# ============================================================================
+
+def save_pgm(path: Path, grid: np.ndarray) -> None:
+    """P5 二值 pgm, Nav2 trinary 模式约定: 0=occupied, 254=free, 205=unknown."""
+    h, w = grid.shape
+    # 像素值映射
+    img = np.full_like(grid, 205, dtype=np.uint8)  # unknown
+    img[grid == 1] = 254  # free
+    img[grid == 2] = 0    # occupied
+    header = f"P5\n{w} {h}\n255\n".encode("ascii")
+    with open(path, "wb") as f:
+        f.write(header)
+        f.write(img.tobytes())
+
+
+def save_yaml(path: Path, pgm_name: str, resolution: float, origin_x: float, origin_y: float) -> None:
+    """map_server yaml 格式, 与 Nav2 默认 nav2_map_server 兼容."""
+    text = (
+        f"image: {pgm_name}\n"
+        f"mode: trinary\n"
+        f"resolution: {resolution}\n"
+        f"origin: [{origin_x:.6f}, {origin_y:.6f}, 0.0]\n"
+        f"negate: 0\n"
+        f"occupied_thresh: 0.65\n"
+        f"free_thresh: 0.25\n"
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+# ============================================================================
+# main
+# ============================================================================
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("pcd", type=Path, help="输入 PCD 文件 (FAST-LIO 输出的 scans.pcd)")
+    ap.add_argument("out_dir", type=Path, help="输出目录 (会创建 <map_name>.pgm/.yaml)")
+    ap.add_argument("map_name", type=str, help="地图文件名前缀, 例如 my_lab")
+    ap.add_argument("--z-min", type=float, default=0.05,
+                    help="Z 切片下界 (米, map 坐标系): 低于此值视为地面 (默认 0.05)")
+    ap.add_argument("--z-max", type=float, default=0.25,
+                    help="Z 切片上界 (米, map 坐标系): 高于此值视为顶部结构 (默认 0.25, Go1 腰部以下)")
+    ap.add_argument("--resolution", type=float, default=0.05,
+                    help="栅格分辨率 (米/格, 默认 0.05 与 slam_toolbox 一致)")
+    ap.add_argument("--hit-threshold", type=int, default=2,
+                    help="单格命中阈值: 超过此值才标为占据 (降噪, 默认 2)")
+    ap.add_argument("--padding", type=float, default=0.5,
+                    help="bbox 外扩 (米, 让地图边界不紧贴点云, 默认 0.5)")
+    args = ap.parse_args()
+
+    if not args.pcd.is_file():
+        print(f"[ERROR] PCD 文件不存在: {args.pcd}", file=sys.stderr)
+        return 1
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[1/4] 加载 PCD: {args.pcd} ({args.pcd.stat().st_size / 1e6:.1f} MB)")
+    xyz = load_pcd_xyz(args.pcd)
+    print(f"        读取 {len(xyz):,} 个点, Z 范围 [{xyz[:,2].min():.3f}, {xyz[:,2].max():.3f}]")
+
+    print(f"[2/4] Z 切片 [{args.z_min}, {args.z_max}] + 栅格化 (res={args.resolution} m)")
+    grid, ox, oy = slice_and_rasterize(
+        xyz, args.z_min, args.z_max, args.resolution, args.hit_threshold, args.padding,
+    )
+    n_occ = int((grid == 2).sum())
+    n_free = int((grid == 1).sum())
+    print(f"        尺寸 {grid.shape[1]}x{grid.shape[0]}, 占据 {n_occ:,} 格, 空闲 {n_free:,} 格")
+    print(f"        origin (世界坐标, 左下角): ({ox:.3f}, {oy:.3f})")
+
+    pgm_path = args.out_dir / f"{args.map_name}.pgm"
+    yaml_path = args.out_dir / f"{args.map_name}.yaml"
+    print(f"[3/4] 写入 PGM: {pgm_path}")
+    save_pgm(pgm_path, grid)
+    print(f"[4/4] 写入 YAML: {yaml_path}")
+    save_yaml(yaml_path, f"{args.map_name}.pgm", args.resolution, ox, oy)
+
+    print("\n[OK] 完成. Nav2 可直接加载:")
+    print(f"    ros2 launch go1_bringup go1_nav.launch.py map:={yaml_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
