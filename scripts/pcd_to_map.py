@@ -5,7 +5,8 @@ pcd_to_map.py — 将 FAST-LIO 累积的 3D 点云切片为 Nav2 可用的 2D �
 用法:
     python3 pcd_to_map.py <input.pcd> <output_dir> <map_name> \
         [--z-min 0.05] [--z-max 0.25] [--resolution 0.05] \
-        [--hit-threshold 2] [--padding 0.5]
+        [--hit-threshold 2] [--padding 0.5] \
+        [--sor-k 20] [--sor-std 2.0] [--min-blob-size 5]
 
 输出:
     <output_dir>/<map_name>.pgm   # P5 灰度图, 0=障碍, 254=空闲, 205=未知
@@ -16,9 +17,14 @@ pcd_to_map.py — 将 FAST-LIO 累积的 3D 点云切片为 Nav2 可用的 2D �
     但 slam_toolbox 2D 扫描匹配在 Go1 颠簸 + 长廊退化场景下容易累计角度误差。
     直接离线切片 PCD 生成静态栅格地图，可避开 2D SLAM 的弱点。
 
-零依赖:
-    只需 numpy, 不依赖 open3d / pypcd / pcl (Jetson 上 pip 安装成本高)。
-    手写 PCD 二进制 header 解析。
+杂点过滤 (两段式):
+    1) 3D 统计离群点去除 (SOR): 对每个点算其 k 近邻平均距离, 分布外 (> μ+σ·std)
+       的点视为噪声丢弃. 对应 PCL StatisticalOutlierRemoval, 能干净去除飞点/玻璃反射.
+    2) 2D 连通域过滤: 栅格化之后, 把占据格的八连通块小于 min_blob_size 的整块置为空闲.
+       去除切片平面上孤立的毛刺, 同时保留长廊墙面 (大连通块).
+
+依赖:
+    numpy, scipy (Jetson 上 `sudo apt install python3-scipy` 即可).
 """
 from __future__ import annotations
 
@@ -27,6 +33,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import label as cc_label
+from scipy.spatial import cKDTree
 
 
 # ============================================================================
@@ -98,6 +106,61 @@ def load_pcd_xyz(path: Path) -> np.ndarray:
         # 只抽取 xyz, 丢弃 intensity/normal 等, 节省内存
         xyz = np.stack([raw["x"], raw["y"], raw["z"]], axis=1).astype(np.float32, copy=False)
         return xyz
+
+
+# ============================================================================
+# 噪声过滤
+# ============================================================================
+
+def statistical_outlier_removal(xyz: np.ndarray, k: int, std_ratio: float) -> np.ndarray:
+    """3D 统计离群点去除 (等价 PCL StatisticalOutlierRemoval).
+
+    对每个点用 cKDTree 查最近 k 个邻居 (不含自身), 取 k 邻居平均距离 d_i.
+    全局分布 μ = mean(d), σ = std(d); 若 d_i > μ + std_ratio·σ 则视为离群点丢弃.
+
+    在长廊/大空间里, FAST-LIO 有时会因玻璃反射/动态物残留/IMU 积分噪声
+    生成孤立的飞点, 这些点的近邻距离远大于墙面/地面密集点, 能被干净剔除.
+
+    参数:
+        k         — 近邻数, 典型 10~30. k 越大越稳, 但计算慢.
+        std_ratio — 判离群的 σ 倍数, 典型 1.0~3.0. 越小越激进.
+    """
+    if k <= 0 or len(xyz) < k + 1:
+        return xyz
+    tree = cKDTree(xyz)
+    # 查 k+1 个邻居 (第 0 个是点本身, 距离 0, 不计入均值)
+    dists, _ = tree.query(xyz, k=k + 1, workers=-1)
+    mean_d = dists[:, 1:].mean(axis=1)
+    thresh = mean_d.mean() + std_ratio * mean_d.std()
+    keep = mean_d <= thresh
+    return xyz[keep]
+
+
+def filter_small_blobs(grid: np.ndarray, min_size: int) -> np.ndarray:
+    """八连通域过滤: 占据格的连通块若小于 min_size 个像素, 整块退回空闲.
+
+    grid 语义沿用: 0=未知, 1=空闲, 2=占据. 原地修改并返回.
+
+    二维切片上仍可能出现孤立的小斑点 (尤其 hit_threshold 调低时),
+    CC 过滤可以清理这些"浮点", 同时大块墙面/柱子的连通分量远超 min_size, 不受影响.
+    """
+    if min_size <= 1:
+        return grid
+    occ = (grid == 2)
+    # 八连通 (3x3 邻域全 1): 对角线相邻的占据格也算同一块
+    structure = np.ones((3, 3), dtype=np.uint8)
+    labels, n = cc_label(occ, structure=structure)
+    if n == 0:
+        return grid
+    # 每个连通域的像素数 (bincount[0] 是背景, 跳过)
+    sizes = np.bincount(labels.ravel())
+    too_small = np.where(sizes < min_size)[0]
+    too_small = too_small[too_small > 0]  # 去掉背景 label 0
+    if too_small.size == 0:
+        return grid
+    small_mask = np.isin(labels, too_small)
+    grid[small_mask] = 1  # 小块退回空闲
+    return grid
 
 
 # ============================================================================
@@ -218,6 +281,12 @@ def main() -> int:
                     help="单格命中阈值: 超过此值才标为占据 (降噪, 默认 2)")
     ap.add_argument("--padding", type=float, default=0.5,
                     help="bbox 外扩 (米, 让地图边界不紧贴点云, 默认 0.5)")
+    ap.add_argument("--sor-k", type=int, default=20,
+                    help="SOR 近邻数 k (默认 20, 设 0 关闭 3D 离群点去除)")
+    ap.add_argument("--sor-std", type=float, default=2.0,
+                    help="SOR σ 倍数阈值 (默认 2.0, 越小过滤越激进)")
+    ap.add_argument("--min-blob-size", type=int, default=5,
+                    help="2D 连通域最小像素数 (默认 5, 小于此值的占据斑点退回空闲; 设 0 关闭)")
     args = ap.parse_args()
 
     if not args.pcd.is_file():
@@ -225,24 +294,42 @@ def main() -> int:
         return 1
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[1/4] 加载 PCD: {args.pcd} ({args.pcd.stat().st_size / 1e6:.1f} MB)")
+    print(f"[1/5] 加载 PCD: {args.pcd} ({args.pcd.stat().st_size / 1e6:.1f} MB)")
     xyz = load_pcd_xyz(args.pcd)
     print(f"        读取 {len(xyz):,} 个点, Z 范围 [{xyz[:,2].min():.3f}, {xyz[:,2].max():.3f}]")
 
-    print(f"[2/4] Z 切片 [{args.z_min}, {args.z_max}] + 栅格化 (res={args.resolution} m)")
+    if args.sor_k > 0:
+        print(f"[2/5] 3D SOR 离群点去除 (k={args.sor_k}, std={args.sor_std})")
+        n_before = len(xyz)
+        xyz = statistical_outlier_removal(xyz, args.sor_k, args.sor_std)
+        n_removed = n_before - len(xyz)
+        print(f"        剔除 {n_removed:,} 点 ({n_removed / n_before * 100:.2f}%), 剩余 {len(xyz):,}")
+    else:
+        print("[2/5] 跳过 3D SOR (--sor-k=0)")
+
+    print(f"[3/5] Z 切片 [{args.z_min}, {args.z_max}] + 栅格化 (res={args.resolution} m)")
     grid, ox, oy = slice_and_rasterize(
         xyz, args.z_min, args.z_max, args.resolution, args.hit_threshold, args.padding,
     )
-    n_occ = int((grid == 2).sum())
+    n_occ_raw = int((grid == 2).sum())
+
+    if args.min_blob_size > 1:
+        grid = filter_small_blobs(grid, args.min_blob_size)
+        n_occ = int((grid == 2).sum())
+        print(f"[4/5] 连通域过滤 (min_blob={args.min_blob_size}): 占据 {n_occ_raw:,} -> {n_occ:,} "
+              f"(剔 {n_occ_raw - n_occ:,} 毛刺格)")
+    else:
+        n_occ = n_occ_raw
+        print("[4/5] 跳过连通域过滤 (--min-blob-size<=1)")
     n_free = int((grid == 1).sum())
-    print(f"        尺寸 {grid.shape[1]}x{grid.shape[0]}, 占据 {n_occ:,} 格, 空闲 {n_free:,} 格")
+    print(f"        最终尺寸 {grid.shape[1]}x{grid.shape[0]}, 占据 {n_occ:,} 格, 空闲 {n_free:,} 格")
     print(f"        origin (世界坐标, 左下角): ({ox:.3f}, {oy:.3f})")
 
     pgm_path = args.out_dir / f"{args.map_name}.pgm"
     yaml_path = args.out_dir / f"{args.map_name}.yaml"
-    print(f"[3/4] 写入 PGM: {pgm_path}")
+    print(f"[5/5] 写入 PGM: {pgm_path}")
     save_pgm(pgm_path, grid)
-    print(f"[4/4] 写入 YAML: {yaml_path}")
+    print(f"       写入 YAML: {yaml_path}")
     save_yaml(yaml_path, f"{args.map_name}.pgm", args.resolution, ox, oy)
 
     print("\n[OK] 完成. Nav2 可直接加载:")

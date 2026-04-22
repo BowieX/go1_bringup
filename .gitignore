@@ -8,3 +8,7 @@ docs/指导记录.txt
 launch/go1_mapping_record.launch.py
 config/go1_mapping_record.rviz
 config/slam_toolbox_mapping.yaml
+
+# 建图会话归档 (auto_archive 输出): 含完整 scans.pcd 副本 + 4 套过滤变体 + compare.png
+# 单次约 750 MB, 不入仓; 论文需要的 compare.png 自行手动复制到论文项目
+maps/sessions/
