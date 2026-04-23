@@ -14,8 +14,9 @@ pcd_to_map.py — 将 FAST-LIO 累积的 3D 点云切片为 Nav2 可用的 2D �
 
 设计动机:
     FAST-LIO 3D 建图 (带回环一致的 ikd-Tree 子地图) 质量极高，
-    但 slam_toolbox 2D 扫描匹配在 Go1 颠簸 + 长廊退化场景下容易累计角度误差。
-    直接离线切片 PCD 生成静态栅格地图，可避开 2D SLAM 的弱点。
+    但 Go1 颠簸 + 长廊退化场景下 2D 扫描匹配易累计角度误差 (项目早期试过
+    slam_toolbox, 8 字路径会出现重影), 故改为直接离线切片 PCD 生成静态
+    栅格地图, 避开 2D SLAM 弱点。
 
 杂点过滤 (两段式):
     1) 3D 统计离群点去除 (SOR): 对每个点算其 k 近邻平均距离, 分布外 (> μ+σ·std)
@@ -276,7 +277,7 @@ def main() -> int:
     ap.add_argument("--z-max", type=float, default=0.25,
                     help="Z 切片上界 (米, map 坐标系): 高于此值视为顶部结构 (默认 0.25, Go1 腰部以下)")
     ap.add_argument("--resolution", type=float, default=0.05,
-                    help="栅格分辨率 (米/格, 默认 0.05 与 slam_toolbox 一致)")
+                    help="栅格分辨率 (米/格, 默认 0.05 与 Nav2 costmap 一致)")
     ap.add_argument("--hit-threshold", type=int, default=2,
                     help="单格命中阈值: 超过此值才标为占据 (降噪, 默认 2)")
     ap.add_argument("--padding", type=float, default=0.5,

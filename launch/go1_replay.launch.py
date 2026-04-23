@@ -60,17 +60,22 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}]
     )
 
-    # unitree_base -> body (仅融合模式需要，为 robot_localization 桥接帧)
-    unitree_base_to_body_tf = Node(
+    # unitree_base -> imu (身份变换, 仅融合模式需要)
+    # 让 robot_localization 能把 /imu (frame_id="imu") 变换到 base_link_frame=unitree_base.
+    # 不再用 unitree_base -> body 桥接以免造成 body 双父 TF 冲突, 详见 go1_base.launch.py 注释.
+    unitree_base_to_imu_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='unitree_base_to_body_tf',
+        name='unitree_base_to_imu_tf',
         arguments=[
             '--x', '0.0',
             '--y', '0.0',
             '--z', '0.0',
+            '--yaw', '0.0',
+            '--pitch', '0.0',
+            '--roll', '0.0',
             '--frame-id', 'unitree_base',
-            '--child-frame-id', 'body'
+            '--child-frame-id', 'imu'
         ],
         parameters=[{'use_sim_time': True}],
         condition=IfCondition(odom_constraint)
@@ -122,7 +127,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_odom_constraint,
         lidar_tf,
-        unitree_base_to_body_tf,
+        unitree_base_to_imu_tf,
         fast_lio_baseline,
         fast_lio_improved,
         ekf_node

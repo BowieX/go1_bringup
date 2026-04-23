@@ -163,7 +163,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    # 路线 B: 不再运行 slam_toolbox, 没有 map 帧; FAST-LIO 以 camera_init 为全局帧
+    # 建图阶段无 map 帧 (Nav2 未启动); FAST-LIO 以 camera_init 为全局帧
     Fixed Frame: camera_init
     Frame Rate: 30
   Name: root

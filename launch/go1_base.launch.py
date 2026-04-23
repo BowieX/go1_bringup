@@ -92,14 +92,26 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}]
     )
 
-    # 静态 TF: 帧桥接 unitree_base -> body (单位变换)
-    # unitree_ros 发布的里程计使用 unitree_odom -> unitree_base 帧
-    # robot_localization 需要在 body 帧中工作，因此需要桥接
-    # 仅在启用里程计融合时需要
-    unitree_base_to_body_tf = Node(
+    # 静态 TF: unitree_base -> imu (身份变换)
+    #
+    # 背景: unitree_ros 发布 /imu 时 header.frame_id="imu", 但没有发布 imu 帧到
+    # 其他帧的 TF. robot_localization EKF 需要把 IMU 数据从 imu 帧变换到
+    # base_link_frame (unitree_base), 因此必须补这条静态 TF.
+    #
+    # 偏移为何取 0: Go1 机体 IMU 装在四足几何中心, 相对 unitree_base 几乎无偏移
+    # (毫米级, 对 EKF 姿态融合可忽略).
+    #
+    # 为何不直接把 unitree_base 和 body 桥接: 那样 body 会同时有 camera_init
+    # (FAST-LIO) 和 unitree_base 两个父节点, tf2 会报 TF_REPEATED_DATA 警告并
+    # 让位姿查询结果时序相关. 现行方案让 FAST-LIO 侧 (camera_init -> body) 与
+    # unitree 侧 (unitree_odom -> unitree_base -> imu) 两棵子树互不相交, EKF
+    # 只在 unitree 子树中工作, 其输出 /odometry/filtered 由 FAST-LIO 的
+    # odom_constraint 按消息内容读取 (不依赖 TF), body 与 unitree_base 物理
+    # 同一点, 位置值可直接视作 body 的位置.
+    unitree_base_to_imu_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='unitree_base_to_body_tf',
+        name='unitree_base_to_imu_tf',
         arguments=[
             '--x', '0.0',
             '--y', '0.0',
@@ -108,7 +120,7 @@ def generate_launch_description():
             '--pitch', '0.0',
             '--roll', '0.0',
             '--frame-id', 'unitree_base',
-            '--child-frame-id', 'body'
+            '--child-frame-id', 'imu'
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_odom_fusion)
@@ -190,7 +202,7 @@ def generate_launch_description():
         unitree_driver,
         livox_driver,
         lidar_tf,
-        unitree_base_to_body_tf,
+        unitree_base_to_imu_tf,
         fast_lio_node,
         ekf_node,
         pointcloud_to_laserscan_node,

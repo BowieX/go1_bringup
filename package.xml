@@ -21,7 +21,6 @@
   
   <!-- SLAM 和导航依赖 -->
   <exec_depend>fast_lio</exec_depend>
-  <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>nav2_bt_navigator</exec_depend>
   <exec_depend>nav2_controller</exec_depend>
@@ -32,7 +31,7 @@
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   
-  <!-- EKF ���程计融合 -->
+  <!-- EKF 里程计融合 -->
   <exec_depend>robot_localization</exec_depend>
 
   <!-- 数据转换依赖 -->

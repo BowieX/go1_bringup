@@ -249,8 +249,9 @@ echo "[3/5] 轨迹对比图 (Trajectory Comparison)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 echo "  生成俯视轨迹对比图..."
+# ROS REP-103 坐标系 (X 前, Y 左, Z 上): 俯视图是 XY 平面 (不是 XZ, XZ 是侧视图)
 evo_traj tum "${BASELINE}" "${IMPROVED}" \
-    --plot_mode xz \
+    --plot_mode xy \
     --save_plot "${RESULTS_DIR}/trajectory_comparison.png" \
     2>&1 | tee "${RESULTS_DIR}/traj_comparison.log" || echo "  [WARN] evo_traj 失败, 跳过"
 echo ""
