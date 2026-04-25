@@ -2,15 +2,17 @@
 #
 # 路线 B 建图方案 (2026-04 调整):
 #   FAST-LIO 在线建图 + 累积 PCD, 不再启动 slam_toolbox.
-#   退出后用 scripts/pcd_to_map.py 将 FAST_LIO/PCD/scans.pcd 切片为 Nav2 静态地图.
+#   退出后用 `ros2 run go1_bringup pcd_to_map` 把 FAST_LIO/PCD/scans.pcd 切片为
+#   Nav2 静态地图.
 #
 # 动机: slam_toolbox 2D 扫描匹配在 Go1 颠簸 + 长廊退化场景下累计角度误差,
 #       而 FAST-LIO 3D 建图 (ikd-Tree 增量更新) 质量明显更高.
 #       离线切片避开 2D SLAM 弱点, Nav2 全栈保持原样.
 #
 # 2026-04-21: 接入 OnShutdown 自动归档 (auto_archive 参数, 默认 true)
-#   退出时调用 scripts/archive_map.py, 把 scans.pcd 复制到 maps/sessions/<时间戳>/
-#   并生成 4 套过滤变体 + 论文对比图. 防止下次建图覆盖, 同时一次性产出对比素材.
+#   退出时调用 `ros2 run go1_bringup archive_map`, 把 scans.pcd 复制到
+#   maps/sessions/<时间戳>/ 并生成 4 套过滤变体 + 论文对比图.
+#   防止下次建图覆盖, 同时一次性产出对比素材.
 
 import os
 from ament_index_python.packages import get_package_share_directory
@@ -66,9 +68,6 @@ def generate_launch_description():
 
     rviz_config = os.path.join(bringup_pkg, 'config', 'go1_mapping.rviz')
 
-    # archive_map.py 路径 (脚本未通过 setup.py 安装, 直接走源码绝对路径)
-    archive_script = os.path.expanduser('~/go1_ws/src/go1_bringup/scripts/archive_map.py')
-
     # 1. 启动底层 (驱动 + FAST-LIO + pointcloud_to_laserscan + 可选 EKF + rosbag)
     #    FAST-LIO 会在节点退出时把累积的 3D 点云写到 FAST_LIO/PCD/scans.pcd
     base_launch = IncludeLaunchDescription(
@@ -105,7 +104,7 @@ def generate_launch_description():
                 LogInfo(msg='[go1_mapping] 退出, 正在归档本次建图 (auto_archive=true)...'),
                 ExecuteProcess(
                     cmd=[
-                        'python3', archive_script,
+                        'ros2', 'run', 'go1_bringup', 'archive_map',
                         '--label', archive_label,
                         '--wait-seconds', '15',
                     ],

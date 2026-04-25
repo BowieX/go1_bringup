@@ -3,6 +3,7 @@
 import os
 from datetime import datetime
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, DeclareLaunchArgument, LogInfo
@@ -10,6 +11,17 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
+
+
+def _load_lidar_extrinsics(share_dir):
+    """读 config/lidar_extrinsics.yaml, 返回 (x, y, z, roll, pitch, yaw, parent, child)."""
+    with open(os.path.join(share_dir, 'config', 'lidar_extrinsics.yaml')) as f:
+        cfg = yaml.safe_load(f)['lidar_extrinsics']
+    return (
+        str(cfg['x']), str(cfg['y']), str(cfg['z']),
+        str(cfg['roll']), str(cfg['pitch']), str(cfg['yaw']),
+        cfg['parent_frame'], cfg['child_frame'],
+    )
 
 def generate_launch_description():
     # ---------------- Launch 参数 ----------------
@@ -69,25 +81,17 @@ def generate_launch_description():
 
     # ---------------- 2. TF 变换 ----------------
     # 静态 TF: body -> livox_frame (LiDAR 相对机体的安装外参)
-    #
-    # 实测外参 (2026-04-17，见实验手册 §4.5):
-    #    body        = 机器狗腰部几何中心 (四腿投影中心)，FAST-LIO 位姿输出帧
-    #    livox_frame = MID-360S 外壳底部 (Livox 手册标注的传感器坐标系原点)
-    #    坐标系: X 前、Y 左、Z 上 (ROS REP-103)
-    #    x 正值 = LiDAR 在机体前方；y 正值 = 在左侧；z 正值 = 在上方
+    # 数值由 config/lidar_extrinsics.yaml 提供, go1_replay.launch.py 读同一份文件,
+    # 修改外参只改 yaml 一个地方即可.
+    x, y, z, roll, pitch, yaw, parent, child = _load_lidar_extrinsics(bringup_pkg)
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='body_to_lidar_tf',
         arguments=[
-            '--x', '0.008',    # LiDAR 在机身前方 8 mm
-            '--y', '0.000',    # 居中，无左右偏移
-            '--z', '0.2742',   # LiDAR 外壳底部比腰部中心高 274.2 mm
-            '--yaw',   '0.0',  # 安装水平，无 yaw 偏角
-            '--pitch', '0.0',  # 安装水平，无 pitch
-            '--roll',  '0.0',  # 安装水平，无 roll
-            '--frame-id', 'body',
-            '--child-frame-id', 'livox_frame'
+            '--x', x, '--y', y, '--z', z,
+            '--yaw', yaw, '--pitch', pitch, '--roll', roll,
+            '--frame-id', parent, '--child-frame-id', child,
         ],
         parameters=[{'use_sim_time': use_sim_time}]
     )

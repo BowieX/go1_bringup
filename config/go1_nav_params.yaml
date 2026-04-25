@@ -1,11 +1,15 @@
 amcl:
   ros__parameters:
     use_sim_time: False
+    # 运动模型噪声: alpha1-4 是平移/旋转间的耦合噪声, alpha5 在 nav2 OmniMotionModel
+    # 里专门刻画"侧向滑移噪声". Go1 全向但绝大多数任务靠纵向行走, 侧向命令稀少,
+    # 当 TEB 偶尔下发 vy 指令时腿足实际侧滑量级 (cm 级) 比纯差速底盘大得多, 故
+    # alpha5 提到 0.5 (默认 0.2 偏低) 让粒子方差更宽松, 避免 AMCL 对 vy 指令"反应过度".
     alpha1: 0.2
     alpha2: 0.2
     alpha3: 0.2
     alpha4: 0.2
-    alpha5: 0.2
+    alpha5: 0.5
     base_frame_id: "body"          # <--- 修改：机器狗基座
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
@@ -267,23 +271,16 @@ waypoint_follower:
       waypoint_pause_duration: 200
 
 # =============================================================================
-# velocity_smoother: 在 TEB 输出 cmd_vel 与 Go1 驱动之间做速度平滑
-# 作用: 抑制 TEB 优化结果的高频抖动，减少 Go1 关节电机冲击
-# 输入: /cmd_vel_nav (Nav2 输出), 输出: /cmd_vel (送给 unitree_ros)
-# 注意: velocity_smoother 激活后，Nav2 默认把控制器输出改发布到 /cmd_vel_nav，
-#       smoother 再发 /cmd_vel — 这与 unitree_ros 订阅的话题名天然一致。
+# velocity_smoother (未配置, 故意留空):
+#   nav2_bringup 默认仍会拉起 velocity_smoother 节点 (lifecycle 列表里有),
+#   不配置时它走默认参数 — 默认订阅 /cmd_vel、发 /smoothed_cmd_vel.
+#   而 Go1 (unitree_ros) 订阅的是 /cmd_vel, 由 controller_server 直接发布,
+#   所以 velocity_smoother 在当前拓扑下相当于"空跑、无人订阅其输出", 不参与控制.
+#   这避免了 controller_server / velocity_smoother 同时往 /cmd_vel 发包的话题冲突.
+#
+#   若实测 Go1 关节抖动明显, 想接入平滑:
+#     1) controller_server 加 `cmd_vel_topic: /cmd_vel_nav` (改控制器发布话题);
+#     2) 在此处补 velocity_smoother yaml, 并通过 launch 给它做 topic remap
+#        ('cmd_vel' → '/cmd_vel_nav', 'smoothed_cmd_vel' → '/cmd_vel');
+#     3) 验证: ros2 topic info /cmd_vel /cmd_vel_nav, 确认无双发布者.
 # =============================================================================
-velocity_smoother:
-  ros__parameters:
-    smoothing_frequency: 20.0
-    scale_velocities: false
-    feedback: "OPEN_LOOP"              # Go1 无精确速度反馈，用开环
-    # 速度/加速度限制需与 TEB 的 max_vel_*/acc_lim_* 保持一致或略宽
-    max_velocity: [0.3, 0.2, 0.7]      # [vx, vy, wz]
-    min_velocity: [-0.15, -0.2, -0.7]
-    max_accel: [1.5, 1.5, 2.0]
-    max_decel: [-1.5, -1.5, -2.0]
-    odom_topic: "/Odometry"            # 用 FAST-LIO 的 10Hz 里程计
-    odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 1.0

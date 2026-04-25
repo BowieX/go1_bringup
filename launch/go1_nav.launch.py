@@ -12,9 +12,8 @@ def generate_launch_description():
     go1_bringup_pkg = get_package_share_directory('go1_bringup')
     nav2_bringup_pkg = get_package_share_directory('nav2_bringup')
 
-    # 默认参数
-    # 假设你建图后保存的地图叫 my_map.yaml，放在 maps 文件夹下
-    # 如果没有 maps 文件夹，请先创建: mkdir -p ~/go1_ws/src/go1_bringup/maps
+    # 默认地图: my_lab.yaml (由 PCD 离线切片生成, 见实验手册 §5)
+    # 首次部署前必须完成建图; 否则 launch 时显式 map:=.../test_map.yaml 回退到占位地图
     default_map = os.path.join(go1_bringup_pkg, 'maps', 'my_lab.yaml')
     nav_params = os.path.join(go1_bringup_pkg, 'config', 'go1_nav_params.yaml')
 
@@ -36,8 +35,10 @@ def generate_launch_description():
 
     declare_use_odom_fusion = DeclareLaunchArgument(
         'use_odom_fusion',
-        default_value='true',
-        description='是否启动 robot_localization EKF 融合节点')
+        default_value='false',
+        description='是否启动 robot_localization EKF 融合节点 (默认 false: nav 阶段 '
+                    'FAST-LIO odom_constraint 默认关闭, AMCL 也不订阅 /odometry/filtered, '
+                    '启 EKF 也无人消费, 只浪费 CPU; 仅消融实验回放需要时打开)')
 
     declare_record_bag = DeclareLaunchArgument(
         'record_bag',

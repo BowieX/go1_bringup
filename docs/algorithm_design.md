@@ -263,6 +263,34 @@ if (odom_constraint_en) {
 - 本实验无动捕/RTK 真值, 所有评估指标基于**相对**标准（闭环漂移 + 卷尺测已知几何距离）。
 - **论文建议**: 明确声明此前提, 避免审稿人质疑; APE 绝不以 baseline 作参考计算。
 
+### 7.5 初始位置偏移的"静止启动"假设
+
+- `apply_odom_position_constraint` 在首次收到 odom 时, 用
+  `odom_init_offset = state_point.pos − odom_latest_pos`
+  一次性记录 `camera_init` 与 `odom_fused` 之间的平移关系, 之后所有
+  退化时刻的位置观测都按 `odom + offset` 套到 `camera_init` 系下。
+  这隐含了一个假设: **首帧采样时机器人静止**。
+- 风险来源是两条滤波器的启动节奏不同步:
+  - FAST-LIO IMU 静态初始化阶段会跳过若干帧 (`flg_first_scan` / `flg_EKF_inited` 双门控);
+  - `robot_localization` EKF 启动只需第一条 `/odom` 与 `/imu`, 通常更快进入稳态。
+  若在 EKF 稳定 → FAST-LIO 进入主循环 这段时间窗内 (实测 0.5–1.5 s) 机器人已经移动,
+  那么 FAST-LIO 的位置基准是"启动时位置", 而 EKF 的位置已经累计了一小段位移,
+  `odom_init_offset` 就会把这段位移**误算成两个坐标系的常量平移**, 后续退化时
+  的位置约束会持续把状态拉向"那段错误位移"对应的位置, 体现为系统性偏置 (而非随机噪声)。
+- **量级估计**: Go1 平稳遥控启动加速度 ~0.3 m/s², 1 s 偏移量约 0.15 m;
+  在 σ_degraded = 0.1 的强约束下, 退化段会被这个偏置稳定拖偏 ~0.1–0.15 m。
+  这与"无融合时退化漂移 0.5–1.0 m"相比量级小得多, 但属于**可消除**的系统性误差。
+- **缓解 (推荐组合)**:
+  1. **流程保证**: 启动 `go1_base.launch.py use_odom_fusion:=true` 后, 让机器狗站立静止
+     ≥ 1 s 再发 `/cmd_vel`; 这是消融实验脚本里默认的做法。
+  2. **代码加速度门控** (可选, 不增加复杂度): 在 `apply_odom_position_constraint`
+     设置 offset 之前增加 `if (state_point.vel.norm() < 0.05) {...}` 守卫, 让首帧采样
+     必须在 FAST-LIO 状态收敛且机器人速度接近 0 时进行; 否则推迟 offset 设置到下一帧。
+  3. **方向性投影** (进一步工作): 真正消除该问题需要对 odom 帧也做 yaw 对齐, 把
+     `odom_pos − odom_init_pos` 投到 `camera_init` 系再叠加, 而不是只补一个常量偏移。
+- **论文建议**: 在"实现细节 / 系统假设"小节列明此约束, 与 §7.2 (yaw 对齐) 并列;
+  实验流程章节明确写"采集启动后静止 ≥ 1 s 再开始遥控"。
+
 ---
 
 ## 8. 创新贡献陈述 (论文摘要可用)

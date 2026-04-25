@@ -16,10 +16,13 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml') + glob('config/*.rviz')),
         # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
-        # 评估脚本 (排除 __pycache__ 目录，setuptools 不支持拷贝目录)
+        # 仍保留 share/scripts 路径, 用于安装非 python 的评估脚本 (evaluate_slam.sh).
+        # python 脚本已迁移到包内并通过 console_scripts 注册, 不再走 share 路径.
         (os.path.join('share', package_name, 'scripts'),
             [f for f in glob('scripts/*') if os.path.isfile(f)]),
     ],
+    # bash 评估脚本: 装到 <prefix>/lib/<pkg>/, 让 `ros2 run go1_bringup evaluate_slam.sh` 可用.
+    scripts=['scripts/evaluate_slam.sh'],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ziggy',
@@ -32,7 +35,14 @@ setup(
         ],
     },
     entry_points={
+        # 所有 python 评估/工具脚本统一通过 ros2 run go1_bringup <name> 调用,
+        # 跨主机/跨工作区不再依赖绝对源码路径 (此前手册里到处是 python3 ~/go1_ws/src/...).
         'console_scripts': [
+            'archive_map = go1_bringup.archive_map:main',
+            'pcd_to_map = go1_bringup.pcd_to_map:main',
+            'record_trajectory = go1_bringup.record_trajectory:main',
+            'nav_metrics = go1_bringup.nav_metrics:main',
+            'measure_geometry = go1_bringup.measure_geometry:main',
         ],
     },
 )

@@ -9,20 +9,33 @@
 #   终端1 (算法节点):
 #     ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=false
 #   终端2 (轨迹记录):
-#     python3 ~/go1_ws/src/go1_bringup/scripts/record_trajectory.py \
-#       --ros-args -p use_sim_time:=true -p output_dir:=<path> -p record_mode:=fastlio
+#     ros2 run go1_bringup record_trajectory --ros-args \
+#       -p use_sim_time:=true -p output_dir:=<path> -p record_mode:=fastlio
 #   终端3 (回放数据):
 #     ros2 bag play <bag_path> --clock --topics /livox/lidar /livox/imu /odom /imu
 #
 # 注意: 回放时只播放原始传感器话题，避免与算法输出话题冲突
 
 import os
+
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
+
+
+def _load_lidar_extrinsics(share_dir):
+    """读 config/lidar_extrinsics.yaml, 与 go1_base.launch.py 共用同一份外参."""
+    with open(os.path.join(share_dir, 'config', 'lidar_extrinsics.yaml')) as f:
+        cfg = yaml.safe_load(f)['lidar_extrinsics']
+    return (
+        str(cfg['x']), str(cfg['y']), str(cfg['z']),
+        str(cfg['roll']), str(cfg['pitch']), str(cfg['yaw']),
+        cfg['parent_frame'], cfg['child_frame'],
+    )
 
 
 def generate_launch_description():
@@ -41,21 +54,17 @@ def generate_launch_description():
     ekf_config = os.path.join(bringup_pkg, 'config', 'ekf_odom_fusion.yaml')
 
     # ---------------- 静态 TF ----------------
-    # body -> livox_frame (始终需要)
-    # ⚠️ 外参必须与 go1_base.launch.py 保持一致！修改时两处同步 (见实验手册 §4.5)
+    # body -> livox_frame: 与 go1_base.launch.py 共用 config/lidar_extrinsics.yaml,
+    # 修改外参只改 yaml 一处.
+    x, y, z, roll, pitch, yaw, parent, child = _load_lidar_extrinsics(bringup_pkg)
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='body_to_lidar_tf',
         arguments=[
-            '--x', '0.008',
-            '--y', '0.000',
-            '--z', '0.2742',
-            '--yaw',   '0.0',
-            '--pitch', '0.0',
-            '--roll',  '0.0',
-            '--frame-id', 'body',
-            '--child-frame-id', 'livox_frame'
+            '--x', x, '--y', y, '--z', z,
+            '--yaw', yaw, '--pitch', pitch, '--roll', roll,
+            '--frame-id', parent, '--child-frame-id', child,
         ],
         parameters=[{'use_sim_time': True}]
     )

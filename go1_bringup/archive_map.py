@@ -39,8 +39,7 @@ from pathlib import Path
 import numpy as np
 
 # 复用 pcd_to_map.py 的函数 (避免多次 fork 子进程各自重复加载 2+ GB PCD)
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pcd_to_map import (  # noqa: E402
+from go1_bringup.pcd_to_map import (
     filter_small_blobs,
     load_pcd_xyz,
     save_pgm,
