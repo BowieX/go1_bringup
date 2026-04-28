@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pcd_to_map.py — 将 FAST-LIO 累积的 3D 点云切片为 Nav2 可用的 2D 占据栅格地图。
+    pcd_to_map.py — 将 FAST-LIO 累积的 3D 点云切片为 Nav2 可用的 2D 占据栅格地图.
 
 用法:
     python3 pcd_to_map.py <input.pcd> <output_dir> <map_name> \
@@ -84,18 +84,24 @@ def pcd_type_to_numpy(t: str, size: int) -> str:
 
 
 def load_pcd_xyz(path: Path) -> np.ndarray:
-    """加载 PCD 文件, 只返回 (N, 3) 的 xyz float32 数组.
+    """
+    加载 PCD 文件, 只返回 (N, 3) 的 xyz float32 数组.
 
-    支持 DATA binary; ASCII 未实现 (FAST-LIO 始终输出 binary, 无需浪费代码)."""
+    支持 DATA binary; ASCII 未实现 (FAST-LIO 始终输出 binary, 无需浪费代码).
+    """
     with open(path, "rb") as f:
         header = parse_pcd_header(f)
         if header["data"] != "binary":
             raise NotImplementedError(f"只支持 DATA binary, 当前是 {header['data']}")
-        if "x" not in header["fields"] or "y" not in header["fields"] or "z" not in header["fields"]:
+        required_fields = {"x", "y", "z"}
+        if not required_fields.issubset(header["fields"]):
             raise ValueError(f"PCD 字段缺失 xyz: {header['fields']}")
         # 构造 structured dtype, 精确匹配每个字段的 type/size/count
         dtype_fields = []
-        for name, sz, tp, cnt in zip(header["fields"], header["size"], header["type"], header["count"]):
+        field_specs = zip(
+            header["fields"], header["size"], header["type"], header["count"],
+        )
+        for name, sz, tp, cnt in field_specs:
             base = pcd_type_to_numpy(tp, sz)
             if cnt == 1:
                 dtype_fields.append((name, base))
@@ -114,7 +120,8 @@ def load_pcd_xyz(path: Path) -> np.ndarray:
 # ============================================================================
 
 def statistical_outlier_removal(xyz: np.ndarray, k: int, std_ratio: float) -> np.ndarray:
-    """3D 统计离群点去除 (等价 PCL StatisticalOutlierRemoval).
+    """
+    3D 统计离群点去除 (等价 PCL StatisticalOutlierRemoval).
 
     对每个点用 cKDTree 查最近 k 个邻居 (不含自身), 取 k 邻居平均距离 d_i.
     全局分布 μ = mean(d), σ = std(d); 若 d_i > μ + std_ratio·σ 则视为离群点丢弃.
@@ -138,7 +145,8 @@ def statistical_outlier_removal(xyz: np.ndarray, k: int, std_ratio: float) -> np
 
 
 def filter_small_blobs(grid: np.ndarray, min_size: int) -> np.ndarray:
-    """八连通域过滤: 占据格的连通块若小于 min_size 个像素, 整块退回空闲.
+    """
+    八连通域过滤: 占据格的连通块若小于 min_size 个像素, 整块退回空闲.
 
     grid 语义沿用: 0=未知, 1=空闲, 2=占据. 原地修改并返回.
 
@@ -176,7 +184,8 @@ def slice_and_rasterize(
     hit_threshold: int,
     padding: float,
 ) -> tuple[np.ndarray, float, float]:
-    """Z 切片 -> 2D 栅格化 -> 返回 (grid, origin_x, origin_y).
+    """
+    Z 切片 -> 2D 栅格化 -> 返回 (grid, origin_x, origin_y).
 
     grid 语义: 0=未知, 1=空闲(ground-plane 扫过但无命中), 2=占据(命中数 >= hit_threshold).
 
@@ -249,7 +258,13 @@ def save_pgm(path: Path, grid: np.ndarray) -> None:
         f.write(img.tobytes())
 
 
-def save_yaml(path: Path, pgm_name: str, resolution: float, origin_x: float, origin_y: float) -> None:
+def save_yaml(
+    path: Path,
+    pgm_name: str,
+    resolution: float,
+    origin_x: float,
+    origin_y: float,
+) -> None:
     """map_server yaml 格式, 与 Nav2 默认 nav2_map_server 兼容."""
     text = (
         f"image: {pgm_name}\n"
@@ -268,7 +283,9 @@ def save_yaml(path: Path, pgm_name: str, resolution: float, origin_x: float, ori
 # ============================================================================
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("pcd", type=Path, help="输入 PCD 文件 (FAST-LIO 输出的 scans.pcd)")
     ap.add_argument("out_dir", type=Path, help="输出目录 (会创建 <map_name>.pgm/.yaml)")
     ap.add_argument("map_name", type=str, help="地图文件名前缀, 例如 my_lab")

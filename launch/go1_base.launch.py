@@ -8,7 +8,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, DeclareLaunchArgument, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 
@@ -23,6 +23,7 @@ def _load_lidar_extrinsics(share_dir):
         cfg['parent_frame'], cfg['child_frame'],
     )
 
+
 def generate_launch_description():
     # ---------------- Launch 参数 ----------------
     use_odom_fusion = LaunchConfiguration('use_odom_fusion')
@@ -30,6 +31,13 @@ def generate_launch_description():
         'use_odom_fusion',
         default_value='true',
         description='是否启动 robot_localization EKF 融合节点 (false=基础模式，不依赖 robot_localization)')
+
+    enable_odom_constraint = LaunchConfiguration('enable_odom_constraint')
+    declare_enable_odom_constraint = DeclareLaunchArgument(
+        'enable_odom_constraint',
+        default_value='false',
+        description='是否让 FAST-LIO 使用 /odometry/filtered 作为退化场景位置约束 '
+                    '(需要 use_odom_fusion:=true 或已有 /odometry/filtered 发布者)')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     declare_use_sim_time = DeclareLaunchArgument(
@@ -139,7 +147,8 @@ def generate_launch_description():
         launch_arguments={
             'rviz': 'false',
             'config_file': 'mid360.yaml',
-            'use_sim_time': use_sim_time
+            'use_sim_time': use_sim_time,
+            'odom_constraint_enable': enable_odom_constraint,
         }.items()
     )
 
@@ -166,7 +175,7 @@ def generate_launch_description():
         executable='pointcloud_to_laserscan_node',
         name='pointcloud_to_laserscan',
         remappings=[
-            ('cloud_in', '/cloud_registered'), # FAST_LIO 的输出话题
+            ('cloud_in', '/cloud_registered'),  # FAST_LIO 的输出话题
             ('scan', '/scan')
         ],
         parameters=[pc2scan_config, {'use_sim_time': use_sim_time}]
@@ -179,7 +188,7 @@ def generate_launch_description():
     #              /Odometry 录制算法输出, 便于无需重跑 FAST-LIO 即可核对轨迹.
     # 注: 不录 /tf (动态 TF 在回放时会由 FAST-LIO 重新生成, 录了也会冲突).
     bag_stamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    bag_output = [bag_dir, '/', bag_stamp]
+    bag_output = PathJoinSubstitution([bag_dir, bag_stamp])
     bag_topics = [
         '/livox/lidar', '/livox/imu',
         '/odom', '/imu',
@@ -188,17 +197,18 @@ def generate_launch_description():
         '/Odometry',
     ]
     bag_record = ExecuteProcess(
-        cmd=['ros2', 'bag', 'record', '-o', *bag_output, *bag_topics],
+        cmd=['ros2', 'bag', 'record', '-o', bag_output, *bag_topics],
         output='screen',
         condition=IfCondition(record_bag),
     )
     bag_log = LogInfo(
-        msg=['[go1_base] rosbag recording to: ', *bag_output],
+        msg=['[go1_base] rosbag recording to: ', bag_output],
         condition=IfCondition(record_bag),
     )
 
     return LaunchDescription([
         declare_use_odom_fusion,
+        declare_enable_odom_constraint,
         declare_use_sim_time,
         declare_record_bag,
         declare_bag_dir,

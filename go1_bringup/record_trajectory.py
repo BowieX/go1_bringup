@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-轨迹记录节点 - 用于 evo 评估工具
+轨迹记录节点 - 用于 evo 评估工具.
 
 功能:
   订阅 FAST-LIO2 的 /Odometry 和 robot_localization 的 /odometry/filtered，
@@ -88,7 +88,7 @@ class TrajectoryRecorder(Node):
         self.timer = self.create_timer(10.0, self.print_stats)
 
     def odom_to_tum_line(self, msg: Odometry) -> str:
-        """将 Odometry 消息转换为 TUM 格式的一行"""
+        """将 Odometry 消息转换为 TUM 格式的一行."""
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
@@ -125,7 +125,7 @@ class TrajectoryRecorder(Node):
             self.file_odom.flush()
 
     def destroy_node(self):
-        """节点销毁时关闭文件"""
+        """节点销毁时关闭文件."""
         if self.file_fastlio:
             self.file_fastlio.close()
             self.get_logger().info(f'FAST-LIO2 trajectory saved ({self.fastlio_count} poses)')

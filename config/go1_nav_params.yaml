@@ -167,8 +167,10 @@ local_costmap:
       robot_base_frame: body       # <--- 修改
       use_sim_time: False
       rolling_window: true
-      width: 4
-      height: 4
+      # TEB 前瞻为 3.0m, 4x4m 窗口半径只有 2m, 实机容易在转角处看不全局部障碍.
+      # 5x5m 在 0.05m 分辨率下仍只有 100x100 栅格, 对 Jetson 负担可控.
+      width: 5
+      height: 5
       resolution: 0.05
       robot_radius: 0.32           # Go1 外接圆半径 (需与 TEB footprint_model.radius 一致)
       plugins: ["voxel_layer", "inflation_layer"]
@@ -247,11 +249,18 @@ planner_server:
 
 behavior_server:
   ros__parameters:
+    use_sim_time: False
     global_frame: camera_init
     robot_base_frame: body
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
+    transform_tolerance: 0.3
+    simulate_ahead_time: 2.0
+    # 恢复行为也会直接发 cmd_vel, 必须与 TEB / velocity_smoother 的保守限速一致.
+    max_rotational_vel: 0.7
+    min_rotational_vel: 0.2
+    rotational_acc_lim: 1.5
     behavior_plugins: ["spin", "backup", "wait"]
     spin:
       plugin: "nav2_behaviors/Spin"
@@ -270,17 +279,20 @@ waypoint_follower:
       enabled: True
       waypoint_pause_duration: 200
 
-# =============================================================================
-# velocity_smoother (未配置, 故意留空):
-#   nav2_bringup 默认仍会拉起 velocity_smoother 节点 (lifecycle 列表里有),
-#   不配置时它走默认参数 — 默认订阅 /cmd_vel、发 /smoothed_cmd_vel.
-#   而 Go1 (unitree_ros) 订阅的是 /cmd_vel, 由 controller_server 直接发布,
-#   所以 velocity_smoother 在当前拓扑下相当于"空跑、无人订阅其输出", 不参与控制.
-#   这避免了 controller_server / velocity_smoother 同时往 /cmd_vel 发包的话题冲突.
-#
-#   若实测 Go1 关节抖动明显, 想接入平滑:
-#     1) controller_server 加 `cmd_vel_topic: /cmd_vel_nav` (改控制器发布话题);
-#     2) 在此处补 velocity_smoother yaml, 并通过 launch 给它做 topic remap
-#        ('cmd_vel' → '/cmd_vel_nav', 'smoothed_cmd_vel' → '/cmd_vel');
-#     3) 验证: ros2 topic info /cmd_vel /cmd_vel_nav, 确认无双发布者.
-# =============================================================================
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: False
+    # Humble nav2_bringup 会将 controller_server 的 cmd_vel remap 到 cmd_vel_nav,
+    # 再由 velocity_smoother 将 cmd_vel_smoothed remap 回 /cmd_vel. 因此 smoother
+    # 是实机控制链路的一部分, 这里必须显式保持与 TEB 一致的全向速度/加速度限制.
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"            # 不依赖 10Hz FAST-LIO 速度反馈, 避免延迟引入振荡
+    max_velocity: [0.3, 0.2, 0.7]
+    min_velocity: [-0.15, -0.2, -0.7]
+    max_accel: [0.8, 0.8, 1.5]
+    max_decel: [-0.8, -0.8, -1.5]
+    odom_topic: /Odometry
+    odom_duration: 0.3
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0

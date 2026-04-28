@@ -12,8 +12,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.py'))),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml') + glob('config/*.rviz')),
+        (os.path.join('share', package_name, 'launch'),
+            glob(os.path.join('launch', '*launch.py'))),
+        (os.path.join('share', package_name, 'config'),
+            glob('config/*.yaml') + glob('config/*.rviz')),
         # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
         # 仍保留 share/scripts 路径, 用于安装非 python 的评估脚本 (evaluate_slam.sh).
@@ -21,7 +23,7 @@ setup(
         (os.path.join('share', package_name, 'scripts'),
             [f for f in glob('scripts/*') if os.path.isfile(f)]),
     ],
-    # bash 评估脚本: 装到 <prefix>/lib/<pkg>/, 让 `ros2 run go1_bringup evaluate_slam.sh` 可用.
+    # bash 评估脚本装到 <prefix>/lib/<pkg>/, 让 ros2 run 可直接调用.
     scripts=['scripts/evaluate_slam.sh'],
     install_requires=['setuptools'],
     zip_safe=True,

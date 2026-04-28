@@ -64,7 +64,8 @@ VARIANTS = [
 # ----------------------------------------------------------------------------
 
 def wait_for_pcd(pcd_path: Path, timeout: float) -> bool:
-    """轮询等待 PCD 文件写完 (FAST-LIO 在析构时才落盘, 可能滞后几秒).
+    """
+    轮询等待 PCD 文件写完 (FAST-LIO 在析构时才落盘, 可能滞后几秒).
 
     判定稳定的依据: 连续两次采样大小相同且 > 0.
     """
@@ -90,12 +91,12 @@ def read_pgm(path: Path) -> np.ndarray:
         while line.startswith(b"#"):
             line = f.readline()
         w, h = map(int, line.split())
-        _maxval = f.readline()
+        f.readline()
         return np.frombuffer(f.read(), dtype=np.uint8).reshape(h, w)
 
 
 def make_compare_figure(out_dir: Path, stats: list[dict]) -> None:
-    """matplotlib 2x2 对比图. 用英文标签避免 CJK 字体依赖."""
+    """Matplotlib 2x2 对比图. 用英文标签避免 CJK 字体依赖."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -172,7 +173,7 @@ def main() -> int:
     # ---- 1. 等 PCD 稳定 ----
     print(f"[archive] 等待 PCD 就绪: {args.pcd_path}")
     if not wait_for_pcd(args.pcd_path, args.wait_seconds):
-        print(f"[archive][ERROR] PCD 未就绪或为空, 跳过归档.", file=sys.stderr)
+        print("[archive][ERROR] PCD 未就绪或为空, 跳过归档.", file=sys.stderr)
         return 1
 
     # ---- 2. 建目录 ----

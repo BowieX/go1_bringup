@@ -8,6 +8,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+
 def generate_launch_description():
     go1_bringup_pkg = get_package_share_directory('go1_bringup')
     nav2_bringup_pkg = get_package_share_directory('nav2_bringup')
@@ -20,6 +21,7 @@ def generate_launch_description():
     map_yaml_file = LaunchConfiguration('map')
     params_file = LaunchConfiguration('params_file')
     use_odom_fusion = LaunchConfiguration('use_odom_fusion')
+    enable_odom_constraint = LaunchConfiguration('enable_odom_constraint')
     record_bag = LaunchConfiguration('record_bag')
     bag_dir = LaunchConfiguration('bag_dir')
 
@@ -38,7 +40,14 @@ def generate_launch_description():
         default_value='false',
         description='是否启动 robot_localization EKF 融合节点 (默认 false: nav 阶段 '
                     'FAST-LIO odom_constraint 默认关闭, AMCL 也不订阅 /odometry/filtered, '
-                    '启 EKF 也无人消费, 只浪费 CPU; 仅消融实验回放需要时打开)')
+                    '启 EKF 也无人消费, 只浪费 CPU; 在线改进模式需与 '
+                    'enable_odom_constraint:=true 同时打开)')
+
+    declare_enable_odom_constraint = DeclareLaunchArgument(
+        'enable_odom_constraint',
+        default_value='false',
+        description='是否让 FAST-LIO 使用 /odometry/filtered 作为退化场景位置约束 '
+                    '(需要 use_odom_fusion:=true)')
 
     declare_record_bag = DeclareLaunchArgument(
         'record_bag',
@@ -57,6 +66,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_odom_fusion': use_odom_fusion,
+            'enable_odom_constraint': enable_odom_constraint,
             'record_bag': record_bag,
             'bag_dir': bag_dir,
         }.items()
@@ -90,6 +100,7 @@ def generate_launch_description():
         declare_map,
         declare_params,
         declare_use_odom_fusion,
+        declare_enable_odom_constraint,
         declare_record_bag,
         declare_bag_dir,
         base_launch,

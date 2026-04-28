@@ -58,7 +58,8 @@ Go1 提供 50 Hz 的**足端里程计** `/odom`（基于关节编码器 + 足底
 **为什么用 `robot_localization` 先融合一次?**
 - Go1 原生 `/odom` 仅 X/Y 有效（腿式 Z 抖动大），姿态来自 IMU 而非里程计积分。
 - `robot_localization` EKF 把 `/odom` + `/imu` 融成一个带**完整 3D pose** 与**连续时间戳**的 `/odometry/filtered`。
-- 输出帧 `odom_fused`（`publish_tf: false`，避免与 FAST-LIO 的 `camera_init → body` TF 冲突）。
+- 输出帧保持在 `unitree_odom → unitree_base`（`publish_tf: false`，避免与 FAST-LIO 的
+  `camera_init → body` TF 冲突，也不再引入第三个里程计根坐标系）。
 
 ---
 
@@ -81,20 +82,22 @@ Go1 提供 50 Hz 的**足端里程计** `/odom`（基于关节编码器 + 足底
 
 **观测量**:
 ```
-z = p_odom ∈ ℝ³   (来自 /odometry/filtered, 单位: 米)
+z = p_odom_xy ∈ ℝ²   (来自 /odometry/filtered 的 X/Y, 单位: 米)
 ```
 
 **量测函数**:
 ```
-h(x) = x.pos   (将状态中的位置分量直接作为预测)
+h(x) = [x.pos_x, x.pos_y]^T   (将状态中的平面位置作为预测)
 ```
 
-**量测雅可比 H (3×23)**:
+**量测雅可比 H (2×23)**:
 ```
-H = [I₃×₃  |  0₃×₂₀]
+H = [I₂×₂  |  0₂×₂₁]
 ```
 
-即位置块为单位阵，其余 20 DOF 均为零 — 该观测**仅约束位置**。
+即 XY 位置块为单位阵，其余 21 DOF 均为零 — 该观测**仅约束平面位置**。
+Z 不参与约束，因为 Go1 腿部里程计本身不融合 Z，Z 方向主要体现步态颠簸与 IMU
+积分误差；走廊退化最主要表现为平面漂移，约束 X/Y 更稳。
 
 > **为何不约束姿态?**
 > 里程计的姿态由 `/imu` 绝对测得, 同一个 IMU 也喂给了 FAST-LIO（LiDAR 帧之间的预积分）。
@@ -105,7 +108,7 @@ H = [I₃×₃  |  0₃×₂₀]
 ### 3.3 量测噪声 R 的切换
 
 ```
-R = σ² · I₃    其中 σ = { σ_normal  = 10.0   若 非退化
+R = σ² · I₂    其中 σ = { σ_normal  = 10.0   若 非退化
                           σ_degraded = 0.1    若  退化 }
 ```
 
@@ -153,7 +156,7 @@ is_degraded = (effct_feat_num < N_thr)  OR  (res_mean_last > r_thr)
 ### 5.1 坐标系对齐
 
 FAST-LIO 的位置在 `camera_init` 帧 (其原点为开机时机器人位置, X 轴为 IMU 初始朝向)。
-`robot_localization` 输出的位置在 `odom_fused` 帧 (其原点为 EKF 首次出结果时机器人位置)。
+`robot_localization` 输出的位置在 `unitree_odom` 帧 (与原始 `/odom` 一致)。
 
 两者**原点不同**但**朝向相同** (都基于 IMU 初始姿态) — 因此仅需 **平移补偿**:
 
@@ -177,17 +180,17 @@ p_odom_aligned = p_odom_raw + odom_init_offset;
 
 **创新协方差**:
 ```
-S = H P Hᵀ + R = P_pos + σ²·I₃            (3×3)
+S = H P Hᵀ + R = P_xy + σ²·I₂            (2×2)
 ```
 
 **Kalman 增益**:
 ```
-K = P Hᵀ S⁻¹   (23×3)
+K = P Hᵀ S⁻¹   (23×2)
 ```
 
 **状态残差与修正**:
 ```
-z_tilde = p_odom_aligned - x.pos           (3×1, 预测残差)
+z_tilde = p_odom_xy_aligned - x.pos_xy     (2×1, 预测残差)
 dx      = K · z_tilde                      (23×1, 状态增量)
 x_new   = x ⊞ dx                           (流形 boxplus)
 ```
@@ -238,10 +241,10 @@ if (odom_constraint_en) {
 
 ### 7.1 退化判据的简化
 
-- 当前判据不区分**退化方向**: 走廊只在纵向退化, 横向和 Z 仍有观测, 但约束是各向同性 R = σ²I₃,
-  这意味着横向和 Z 也被 odom "轻微拖动"。
-- **缓解**: odom 本身横向/Z 精度不差（腿式在 X/Y 方向精度接近, Z 在 EKF 中已被 process noise 抑制）,
-  实际影响量级毫米-厘米, 可接受。
+- 当前判据不区分**退化方向**: 走廊通常主要在纵向退化, 横向仍可能有观测,
+  但 XY 约束采用各向同性 `R = σ²I₂`, 这意味着 X/Y 会按同一权重被 odom 拉动。
+- **缓解**: 已不再约束 Z; X/Y 方向中, Go1 腿式里程计在低速室内实验的短时漂移
+  明显小于长廊 LiDAR 退化漂移, 可接受。
 - **论文建议**: 承认此简化, 讨论时提 "进一步工作可用 H^T H 特征分解做方向性约束"。
 
 ### 7.2 坐标系 yaw 对齐的时序性
@@ -267,7 +270,7 @@ if (odom_constraint_en) {
 
 - `apply_odom_position_constraint` 在首次收到 odom 时, 用
   `odom_init_offset = state_point.pos − odom_latest_pos`
-  一次性记录 `camera_init` 与 `odom_fused` 之间的平移关系, 之后所有
+  一次性记录 `camera_init` 与 `unitree_odom` 之间的平移关系, 之后所有
   退化时刻的位置观测都按 `odom + offset` 套到 `camera_init` 系下。
   这隐含了一个假设: **首帧采样时机器人静止**。
 - 风险来源是两条滤波器的启动节奏不同步:
@@ -296,8 +299,8 @@ if (odom_constraint_en) {
 ## 8. 创新贡献陈述 (论文摘要可用)
 
 1. **提出 FAST-LIO2 在走廊类几何退化场景下的位置约束增强方法**:
-   在 IESEKF 点面迭代收敛后追加一次基于外部融合里程计的位置观测更新，
-   量测矩阵 H = [I₃, 0₃×₂₀] (3×23), Joseph form 协方差更新保证数值稳定性。
+   在 IESEKF 点面迭代收敛后追加一次基于外部融合里程计的 XY 位置观测更新，
+   量测矩阵 H = [I₂, 0₂×₂₁] (2×23), Joseph form 协方差更新保证数值稳定性。
 2. **引入基于有效特征数与残差均值的在线退化检测**, 动态切换量测噪声 R
    (σ_normal=10.0 ↔ σ_degraded=0.1), 实现"正常场景几乎不干预、退化场景强约束"的选择性增强。
 3. **工程上与 robot_localization EKF + FAST-LIO2 无缝集成**, 无需重新推导 Jacobian, 改动 ≈ 100 行 C++,

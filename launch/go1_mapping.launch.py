@@ -41,6 +41,13 @@ def generate_launch_description():
         default_value='true',
         description='是否启动 robot_localization EKF 融合节点')
 
+    enable_odom_constraint = LaunchConfiguration('enable_odom_constraint')
+    declare_enable_odom_constraint = DeclareLaunchArgument(
+        'enable_odom_constraint',
+        default_value='false',
+        description='是否让 FAST-LIO 使用 /odometry/filtered 作为退化场景位置约束 '
+                    '(需要 use_odom_fusion:=true)')
+
     record_bag = LaunchConfiguration('record_bag')
     declare_record_bag = DeclareLaunchArgument(
         'record_bag',
@@ -76,6 +83,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_odom_fusion': use_odom_fusion,
+            'enable_odom_constraint': enable_odom_constraint,
             'record_bag': record_bag,
             'bag_dir': bag_dir,
         }.items()
@@ -117,6 +125,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_odom_fusion,
+        declare_enable_odom_constraint,
         declare_record_bag,
         declare_bag_dir,
         declare_auto_archive,

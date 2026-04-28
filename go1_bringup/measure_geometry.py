@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-已知几何距离误差测量工具
+已知几何距离误差测量工具.
 
 用法:
   python3 measure_geometry.py <traj_file> <constraints_csv> [--output results.csv]
@@ -36,7 +36,7 @@ import sys
 
 
 def load_trajectory(filepath):
-    """读取 TUM 格式轨迹，返回 [(timestamp, x, y, z), ...]"""
+    """读取 TUM 格式轨迹，返回 [(timestamp, x, y, z), ...]."""
     poses = []
     with open(filepath) as f:
         for line in f:
@@ -55,7 +55,7 @@ def load_trajectory(filepath):
 
 
 def load_constraints(filepath):
-    """读取几何约束 CSV，返回 [(name, measured_dist, sx, sy, ex, ey), ...]"""
+    """读取几何约束 CSV，返回 [(name, measured_dist, sx, sy, ex, ey), ...]."""
     constraints = []
     with open(filepath) as f:
         reader = csv.reader(f)
@@ -75,7 +75,7 @@ def load_constraints(filepath):
 
 
 def find_nearest_pose(poses, target_x, target_y):
-    """在轨迹中找距离 (target_x, target_y) 最近的点"""
+    """在轨迹中找距离 (target_x, target_y) 最近的点."""
     best_dist = float('inf')
     best_pose = None
     best_idx = 0
@@ -117,7 +117,10 @@ def evaluate(traj_file, constraints_file, output_file=None):
         match_dev = max(d1, d2)
         warn = " !" if match_dev > 1.0 else ""
 
-        print(f"{name:<16s} {measured:>8.2f} {slam_dist:>8.2f} {error:>8.3f} {pct:>6.1f}% {match_dev:>8.2f}m{warn}")
+        print(
+            f"{name:<16s} {measured:>8.2f} {slam_dist:>8.2f} "
+            f"{error:>8.3f} {pct:>6.1f}% {match_dev:>8.2f}m{warn}"
+        )
 
         results.append({
             'name': name,
