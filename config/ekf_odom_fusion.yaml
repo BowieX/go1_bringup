@@ -10,8 +10,9 @@
 # - odom_frame/world_frame 取 unitree_odom (与 /odom header.frame_id 对齐), base_link_frame
 #   取 unitree_base (与 /odom child_frame_id 对齐). 不再跨树到 body —
 #   body 由 FAST-LIO 在 camera_init 子树发布, 两棵 TF 子树互不相交, 避免 body 双父冲突.
-#   unitree_base 与 body 物理同一点, /odometry/filtered 的位置值可直接被 FAST-LIO 的
-#   odom_constraint 当作 body 位置读取 (odom_constraint 只读消息, 不查 TF).
+#   /odometry/filtered 的位置值由 FAST-LIO 的 odom_constraint 按消息内容读取
+#   (不查 TF): 首帧做 unitree_odom 到 camera_init 的 SE(2) 初始对齐, 后续使用
+#   腿部里程计平面位移增量, 不在 TF 树里桥接 body 与 unitree_base.
 # =============================================================================
 
 ekf_filter_node:

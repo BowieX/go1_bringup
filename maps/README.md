@@ -22,3 +22,6 @@ ros2 run go1_bringup pcd_to_map \
 - `my_lab.yaml` — 地图元数据
 
 导航 launch (`go1_nav.launch.py`) 默认加载 `my_lab.yaml`.
+
+`maps/sessions/` 是自动归档目录, 体积很大且不会随 `go1_bringup` 安装; 需要用于论文的
+`compare.png` 或历史地图时, 从对应会话目录手动挑选。

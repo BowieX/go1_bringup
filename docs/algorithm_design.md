@@ -100,10 +100,11 @@ Z 不参与约束，因为 Go1 腿部里程计本身不融合 Z，Z 方向主要
 积分误差；走廊退化最主要表现为平面漂移，约束 X/Y 更稳。
 
 > **为何不约束姿态?**
-> 里程计的姿态由 `/imu` 绝对测得, 同一个 IMU 也喂给了 FAST-LIO（LiDAR 帧之间的预积分）。
-> 如果用同一个 IMU 的姿态去"校正"基于它自身预积分的滤波器, 等价于把观测量和状态相关化, 违反 Kalman 的
-> **观测与状态相互独立** 假设, 会导致滤波器过度自信 (P 塌缩) 最终发散。
-> 因此只注入位置这个在走廊场景里**真正独立**的信息源。
+> FAST-LIO 的预积分使用 MID-360S 内置 IMU (`/livox/imu`), `robot_localization`
+> 的姿态主要来自 Go1 机体 IMU (`/imu`). 两套 IMU 的安装外参、时间同步与协方差
+> 未做严格标定, 若把 EKF 姿态直接作为 FAST-LIO 姿态量测, 反而会引入难以解释的
+> 姿态偏置和过度自信。本文只把腿部里程计/EKF 的**平面位置增量**作为几何退化时的
+> 外部约束; yaw 仅用于首帧坐标系对齐, 不作为持续姿态观测注入。
 
 ### 3.3 量测噪声 R 的切换
 
@@ -158,22 +159,27 @@ is_degraded = (effct_feat_num < N_thr)  OR  (res_mean_last > r_thr)
 FAST-LIO 的位置在 `camera_init` 帧 (其原点为开机时机器人位置, X 轴为 IMU 初始朝向)。
 `robot_localization` 输出的位置在 `unitree_odom` 帧 (与原始 `/odom` 一致)。
 
-两者**原点不同**但**朝向相同** (都基于 IMU 初始姿态) — 因此仅需 **平移补偿**:
+两者**原点不同**, 初始 yaw 也可能因两套 IMU/驱动定义存在小偏差。当前实现采用
+首帧 **SE(2) 初始对齐**: 记录两条轨迹的初始平面位置与 yaw, 后续只使用
+`unitree_odom` 下的平面位移增量, 通过初始 yaw 差旋转到 `camera_init` 平面:
 
 ```cpp
-if (!odom_init_offset_set) {
-    // 首次收到 odom 时记录偏移: offset = filter_pos - odom_pos
-    odom_init_offset = x.pos - p_odom_raw;
-    odom_init_offset_set = true;
-    return;   // 首帧不做更新, 仅设置偏移
+if (!odom_init_alignment_set) {
+    odom_init_pos = p_odom_raw;          // unitree_odom 下的初始位置
+    lio_init_pos  = x.pos;               // camera_init 下的初始 FAST-LIO 位置
+    odom_init_yaw = yaw(p_odom_raw.q);   // EKF/Unitree 初始 yaw
+    lio_init_yaw  = yaw(x.rot);          // FAST-LIO 初始 yaw
+    odom_init_alignment_set = true;
+    return;   // 首帧不做更新, 仅设置 SE(2) 对齐
 }
 
-// 后续每一帧: 把 odom 位置搬到 camera_init 系
-p_odom_aligned = p_odom_raw + odom_init_offset;
+delta_odom = p_odom_raw.xy - odom_init_pos.xy;
+R0 = Rz(lio_init_yaw - odom_init_yaw);
+p_odom_aligned.xy = lio_init_pos.xy + R0 * delta_odom;
 ```
 
 > **启动假设**: 机器人上电后**保持静止 ≥ 1 秒** 直到 FAST-LIO 与 EKF 都出稳定位姿再开始运动。
-> 若上电时机器人就在移动或漂移, `odom_init_offset` 会捕获瞬时噪声, 后续约束全程带偏置。
+> 若上电时机器人就在移动或漂移, 初始位置/yaw 对齐会捕获瞬时噪声, 后续约束全程带偏置。
 > 详见 §7.5 (含量级估计与缓解方案); 实机前联调检查清单已在 B 阶段明确要求此启动流程。
 
 ### 5.2 Kalman 更新方程
@@ -232,7 +238,7 @@ if (odom_constraint_en) {
 | NaN/Inf 过滤 | `odom_cbk` 开头 | EKF 发散时会发 NaN, 直接丢弃不污染缓存 |
 | mutex 保护 | `mtx_odom` | 50Hz 回调线程 vs 10Hz LIO 更新线程的数据竞争 |
 | Odom 超时 | `age > timeout_sec` | EKF 崩溃后不再用 stale 位置拖偏滤波器 |
-| 首帧偏移 one-shot | `odom_init_offset_set` | 防止重复触发导致偏移漂移 |
+| 首帧 SE(2) 对齐 one-shot | `odom_init_alignment_set` | 固定 `unitree_odom` 到 `camera_init` 的初始平面变换, 防止重复触发导致漂移 |
 | 触发率统计 | `g_total_constraint_frames`, `g_degraded_frames` | 消融实验可观测性 — 验证退化判据真的触发了 |
 
 ---
@@ -247,13 +253,15 @@ if (odom_constraint_en) {
   明显小于长廊 LiDAR 退化漂移, 可接受。
 - **论文建议**: 承认此简化, 讨论时提 "进一步工作可用 H^T H 特征分解做方向性约束"。
 
-### 7.2 坐标系 yaw 对齐的时序性
+### 7.2 坐标系 yaw 对齐的局限
 
-- `odom_init_offset` 只捕获**位置**, 不做**偏航对齐**。
-- 由于 FAST-LIO 与 EKF 都用同一个 IMU 初始化姿态, 两帧初始朝向一致; 但长时间运行后,
-  FAST-LIO 可能因退化产生 yaw 漂移, 此时 odom 位置经 `+ offset` 后不再严格在 `camera_init` 系。
+- 当前实现已在首帧记录 `lio_init_yaw - odom_init_yaw`, 把腿部里程计的 XY 位移投到
+  `camera_init` 平面, 避免了"只平移补偿"在两套 IMU 初始 yaw 不一致时的系统偏差。
+- 该 yaw 对齐是**一次性初始对齐**, 不持续使用 EKF/Unitree 的姿态校正 FAST-LIO。
+  若长时间运行后 FAST-LIO 或腿部里程计自身发生 yaw/尺度漂移, 两个平面坐标系仍会逐步偏离。
 - **量级估计**: 30 m 闭环 + 正常 LiDAR yaw 漂移 ~1° → 位置误差 30·sin(1°) ≈ 0.5 m, 接近漂移总量。
-- **论文建议**: 可在讨论章节报告此现象; 毕设尺度内 (单次实验 < 2 分钟) 影响有限。
+- **论文建议**: 可在讨论章节说明"本文采用初始 SE(2) 对齐, 不进行持续 yaw 观测更新";
+  毕设尺度内 (单次实验 < 2 分钟、低速 0.2-0.3 m/s) 影响有限。
 
 ### 7.3 时间戳对齐
 
@@ -266,20 +274,19 @@ if (odom_constraint_en) {
 - 本实验无动捕/RTK 真值, 所有评估指标基于**相对**标准（闭环漂移 + 卷尺测已知几何距离）。
 - **论文建议**: 明确声明此前提, 避免审稿人质疑; APE 绝不以 baseline 作参考计算。
 
-### 7.5 初始位置偏移的"静止启动"假设
+### 7.5 初始 SE(2) 对齐的"静止启动"假设
 
 - `apply_odom_position_constraint` 在首次收到 odom 时, 用
-  `odom_init_offset = state_point.pos − odom_latest_pos`
-  一次性记录 `camera_init` 与 `unitree_odom` 之间的平移关系, 之后所有
-  退化时刻的位置观测都按 `odom + offset` 套到 `camera_init` 系下。
+  `odom_init_pos / lio_init_pos / odom_init_yaw / lio_init_yaw`
+  一次性记录 `camera_init` 与 `unitree_odom` 之间的初始 SE(2) 平面关系, 之后所有
+  退化时刻的位置观测都按 `lio_init + R0 * (odom - odom_init)` 套到 `camera_init` 系下。
   这隐含了一个假设: **首帧采样时机器人静止**。
 - 风险来源是两条滤波器的启动节奏不同步:
   - FAST-LIO IMU 静态初始化阶段会跳过若干帧 (`flg_first_scan` / `flg_EKF_inited` 双门控);
   - `robot_localization` EKF 启动只需第一条 `/odom` 与 `/imu`, 通常更快进入稳态。
   若在 EKF 稳定 → FAST-LIO 进入主循环 这段时间窗内 (实测 0.5–1.5 s) 机器人已经移动,
-  那么 FAST-LIO 的位置基准是"启动时位置", 而 EKF 的位置已经累计了一小段位移,
-  `odom_init_offset` 就会把这段位移**误算成两个坐标系的常量平移**, 后续退化时
-  的位置约束会持续把状态拉向"那段错误位移"对应的位置, 体现为系统性偏置 (而非随机噪声)。
+  那么 FAST-LIO 与 EKF 的"初始点"并不对应同一物理位置, 后续 `odom - odom_init`
+  的位移增量会带入这段启动偏置, 体现为系统性偏置 (而非随机噪声)。
 - **量级估计**: Go1 平稳遥控启动加速度 ~0.3 m/s², 1 s 偏移量约 0.15 m;
   在 σ_degraded = 0.1 的强约束下, 退化段会被这个偏置稳定拖偏 ~0.1–0.15 m。
   这与"无融合时退化漂移 0.5–1.0 m"相比量级小得多, 但属于**可消除**的系统性误差。
@@ -287,11 +294,11 @@ if (odom_constraint_en) {
   1. **流程保证**: 启动 `go1_base.launch.py use_odom_fusion:=true` 后, 让机器狗站立静止
      ≥ 1 s 再发 `/cmd_vel`; 这是消融实验脚本里默认的做法。
   2. **代码加速度门控** (可选, 不增加复杂度): 在 `apply_odom_position_constraint`
-     设置 offset 之前增加 `if (state_point.vel.norm() < 0.05) {...}` 守卫, 让首帧采样
-     必须在 FAST-LIO 状态收敛且机器人速度接近 0 时进行; 否则推迟 offset 设置到下一帧。
-  3. **方向性投影** (进一步工作): 真正消除该问题需要对 odom 帧也做 yaw 对齐, 把
-     `odom_pos − odom_init_pos` 投到 `camera_init` 系再叠加, 而不是只补一个常量偏移。
-- **论文建议**: 在"实现细节 / 系统假设"小节列明此约束, 与 §7.2 (yaw 对齐) 并列;
+     设置初始 SE(2) 对齐之前增加 `if (state_point.vel.norm() < 0.05) {...}` 守卫, 让首帧采样
+     必须在 FAST-LIO 状态收敛且机器人速度接近 0 时进行; 否则推迟初始对齐到下一帧。
+  3. **多点对齐** (进一步工作): 使用启动后短时间静止窗口内多帧均值估计初始位置和 yaw,
+     比单帧对齐更抗 IMU/odom 瞬时噪声。
+- **论文建议**: 在"实现细节 / 系统假设"小节列明此约束, 与 §7.2 (yaw 对齐局限) 并列;
   实验流程章节明确写"采集启动后静止 ≥ 1 s 再开始遥控"。
 
 ---
@@ -299,7 +306,8 @@ if (odom_constraint_en) {
 ## 8. 创新贡献陈述 (论文摘要可用)
 
 1. **提出 FAST-LIO2 在走廊类几何退化场景下的位置约束增强方法**:
-   在 IESEKF 点面迭代收敛后追加一次基于外部融合里程计的 XY 位置观测更新，
+   首帧完成 `unitree_odom` 到 `camera_init` 的 SE(2) 初始平面对齐, 在 IESEKF
+   点面迭代收敛后追加一次基于外部融合里程计平面位移的 XY 位置观测更新，
    量测矩阵 H = [I₂, 0₂×₂₁] (2×23), Joseph form 协方差更新保证数值稳定性。
 2. **引入基于有效特征数与残差均值的在线退化检测**, 动态切换量测噪声 R
    (σ_normal=10.0 ↔ σ_degraded=0.1), 实现"正常场景几乎不干预、退化场景强约束"的选择性增强。

@@ -3,6 +3,7 @@ from setuptools import find_packages, setup
 from glob import glob
 
 package_name = 'go1_bringup'
+map_files = [path for path in glob('maps/*') if os.path.isfile(path)]
 
 setup(
     name=package_name,
@@ -16,8 +17,8 @@ setup(
             glob(os.path.join('launch', '*launch.py'))),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml') + glob('config/*.rviz')),
-        # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
-        (os.path.join('share', package_name, 'maps'), glob('maps/*')),
+        # 只安装 maps 下的普通文件; maps/sessions/ 是大体积归档目录, 由 .gitignore 排除.
+        (os.path.join('share', package_name, 'maps'), map_files),
     ],
     # bash 评估脚本装到 <prefix>/lib/<pkg>/, 让 ros2 run 可直接调用.
     # python 脚本已迁移到包内并通过 console_scripts 注册, 不再走 share 路径.

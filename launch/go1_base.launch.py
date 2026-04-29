@@ -118,8 +118,9 @@ def generate_launch_description():
     # 让位姿查询结果时序相关. 现行方案让 FAST-LIO 侧 (camera_init -> body) 与
     # unitree 侧 (unitree_odom -> unitree_base -> imu) 两棵子树互不相交, EKF
     # 只在 unitree 子树中工作, 其输出 /odometry/filtered 由 FAST-LIO 的
-    # odom_constraint 按消息内容读取 (不依赖 TF), body 与 unitree_base 物理
-    # 同一点, 位置值可直接视作 body 的位置.
+    # odom_constraint 按消息内容读取 (不依赖 TF): 首帧记录 unitree_odom 与
+    # camera_init 的 SE(2) 初始关系, 后续只把腿部里程计平面位移投到
+    # FAST-LIO 的 camera_init 平面, 不在 TF 树里桥接 body 与 unitree_base.
     unitree_base_to_imu_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',

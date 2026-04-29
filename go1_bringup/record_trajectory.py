@@ -42,7 +42,6 @@ class TrajectoryRecorder(Node):
         # 参数: 输出目录、记录模式、实验标签
         self.declare_parameter('output_dir', os.path.expanduser('~/go1_ws/trajectories'))
         self.declare_parameter('record_mode', 'both')  # 'fastlio', 'fused', 'both', 'all'
-        self.declare_parameter('use_sim_time', False)   # rosbag 回放时设为 true
         self.declare_parameter('experiment_label', '')   # 'baseline'/'improved'/''
 
         output_dir = self.get_parameter('output_dir').get_parameter_value().string_value

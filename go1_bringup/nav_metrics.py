@@ -66,7 +66,9 @@ class NavMetricsRecorder(Node):
         output_file = self.get_parameter('output_file').get_parameter_value().string_value
 
         # 创建输出目录并打开 CSV
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        output_dir = os.path.dirname(output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         self.csv_file = open(output_file, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
         self.csv_writer.writerow([
