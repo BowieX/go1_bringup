@@ -18,12 +18,9 @@ setup(
             glob('config/*.yaml') + glob('config/*.rviz')),
         # 添加 maps 文件夹，包括 yaml, pgm, md 等文件
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
-        # 仍保留 share/scripts 路径, 用于安装非 python 的评估脚本 (evaluate_slam.sh).
-        # python 脚本已迁移到包内并通过 console_scripts 注册, 不再走 share 路径.
-        (os.path.join('share', package_name, 'scripts'),
-            [f for f in glob('scripts/*') if os.path.isfile(f)]),
     ],
     # bash 评估脚本装到 <prefix>/lib/<pkg>/, 让 ros2 run 可直接调用.
+    # python 脚本已迁移到包内并通过 console_scripts 注册, 不再走 share 路径.
     scripts=['scripts/evaluate_slam.sh'],
     install_requires=['setuptools'],
     zip_safe=True,

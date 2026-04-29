@@ -172,9 +172,9 @@ if (!odom_init_offset_set) {
 p_odom_aligned = p_odom_raw + odom_init_offset;
 ```
 
-> **启动假设**: 机器人上电后**保持静止 ≥ 3 秒** 直到 FAST-LIO 与 EKF 都出稳定位姿再开始运动。
+> **启动假设**: 机器人上电后**保持静止 ≥ 1 秒** 直到 FAST-LIO 与 EKF 都出稳定位姿再开始运动。
 > 若上电时机器人就在移动或漂移, `odom_init_offset` 会捕获瞬时噪声, 后续约束全程带偏置。
-> 实机前联调检查清单已在 B 阶段明确要求此启动流程。
+> 详见 §7.5 (含量级估计与缓解方案); 实机前联调检查清单已在 B 阶段明确要求此启动流程。
 
 ### 5.2 Kalman 更新方程
 
@@ -325,6 +325,6 @@ if (odom_constraint_en) {
 
 - FAST-LIO2 原论文: Xu et al., "FAST-LIO2: Fast Direct LiDAR-Inertial Odometry", IEEE T-RO 2022.
 - robot_localization: Moore & Stouch, "A Generalized Extended Kalman Filter Implementation for the ROS", IAS 2014.
-- 实现细节: [FAST_LIO/src/laserMapping.cpp](../../FAST_LIO/src/laserMapping.cpp) 第 146-253 行 (核心函数) 与第 1205-1240 行 (集成点)
+- 实现细节: [FAST_LIO/src/laserMapping.cpp](../../FAST_LIO/src/laserMapping.cpp) 第 146-282 行 (核心函数 `apply_odom_position_constraint` + odom 回调与全局变量) 与第 1234-1267 行 (主循环集成点)
 - 消融实验流程: [实验手册 §7](实验手册.md)
 - 调参闭环: [实验手册 §10.1](实验手册.md)

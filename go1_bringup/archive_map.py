@@ -159,7 +159,11 @@ def main() -> int:
     ap.add_argument("--no-compare", action="store_true",
                     help="跳过 matplotlib 对比图 (仅保留 pgm/yaml, 省 ~10 秒)")
     ap.add_argument("--promote", action="store_true",
-                    help="同时把 both.* 复制为 maps/my_lab.* (Nav2 默认加载)")
+                    help="同时把 both.* 复制为 maps/my_lab.* (Nav2 默认加载). "
+                         "注意: --promote 会用本次传入的 --z-min/--z-max/--resolution/"
+                         "--hit-threshold/--padding 重新跑切片, 与之前归档的 both.* 可能不同; "
+                         "若想完全复用某次归档, 直接 cp sessions/<时间戳>/both.{pgm,yaml} "
+                         "到 maps/my_lab.* 并把 yaml 里 image: 字段改成 my_lab.pgm")
     ap.add_argument("--wait-seconds", type=float, default=10.0,
                     help="等待 PCD 文件稳定的最长秒数 (默认 10, FAST-LIO 析构落盘需时间)")
     # pcd_to_map.py 透传参数 (切片 + 栅格化)
