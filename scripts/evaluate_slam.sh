@@ -280,14 +280,48 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 echo "  生成俯视轨迹对比图..."
 # ROS REP-103 坐标系 (X 前, Y 左, Z 上): 俯视图是 XY 平面 (不是 XZ, XZ 是侧视图)
-TRAJ_FILES=("${BASELINE}" "${IMPROVED}")
-if ${HAS_ALWAYS}; then
-    TRAJ_FILES+=("${ALWAYS}")
-fi
-evo_traj tum "${TRAJ_FILES[@]}" \
-    --plot_mode xy \
-    --save_plot "${RESULTS_DIR}/trajectory_comparison.png" \
-    2>&1 | tee "${RESULTS_DIR}/traj_comparison.log" || echo "  [WARN] evo_traj 失败, 跳过"
+# 直接用 matplotlib 画, 避免 evo_traj 引入 seaborn -> pandas -> numpy ABI 冲突
+# (Jetson 上 apt 的 python3-pandas 1.3.5 与 pip 的 numpy 2.x 二进制不兼容).
+python3 - <<PYEOF
+import os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+trajs = [
+    ("${BASELINE}", "baseline",  "tab:blue"),
+    ("${IMPROVED}", "improved",  "tab:orange"),
+]
+if "${HAS_ALWAYS}" == "true":
+    trajs.append(("${ALWAYS}",  "always-on", "tab:green"))
+
+fig, ax = plt.subplots(figsize=(10, 8))
+for path, label, color in trajs:
+    if not os.path.isfile(path):
+        continue
+    xs, ys = [], []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) >= 3:
+                xs.append(float(parts[1])); ys.append(float(parts[2]))
+    if xs:
+        ax.plot(xs, ys, '-', color=color, label=f'{label} ({len(xs)} pts)', linewidth=1.5)
+        ax.plot(xs[0], ys[0], 'o', color=color, markersize=8, markeredgecolor='black')
+        ax.plot(xs[-1], ys[-1], 's', color=color, markersize=8, markeredgecolor='black')
+
+ax.set_aspect('equal', adjustable='datalim')
+ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
+ax.set_title('Trajectory comparison (XY top-down, ROS REP-103)')
+ax.legend(loc='best'); ax.grid(True, linestyle=':', alpha=0.5)
+fig.tight_layout()
+fig.savefig("${RESULTS_DIR}/trajectory_comparison.png", dpi=150)
+plt.close(fig)
+print(f"  保存: ${RESULTS_DIR}/trajectory_comparison.png")
+PYEOF
 echo ""
 
 # ==================================================================
