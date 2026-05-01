@@ -393,10 +393,10 @@ if [ -f "${IMPROVED_LOG}" ]; then
 rate = float('${TRIGGER_RATE}')
 if rate < 20.0:
     print('  [WARN] 触发率过低 (<20%): 退化判据偏严, 创新只在很短窗口生效')
-    print('         → 建议降低 feat_threshold 或抬高 residual_threshold 后重跑')
+    print('         → 建议提高 feat_threshold 或降低 residual_threshold 后重跑')
 elif rate > 60.0:
     print('  [WARN] 触发率过高 (>60%): 退化判据过于敏感, 接近全程强约束, 失去"仅退化时增强"语义')
-    print('         → 建议提高 feat_threshold 或降低 residual_threshold 后重跑')
+    print('         → 建议降低 feat_threshold 或提高 residual_threshold 后重跑')
 else:
     print('  [OK]   触发率在合理区间 (20-60%)')
 " 2>/dev/null || true

@@ -128,14 +128,24 @@ class TrajectoryRecorder(Node):
         """节点销毁时关闭文件."""
         if self.file_fastlio:
             self.file_fastlio.close()
-            self.get_logger().info(f'FAST-LIO2 trajectory saved ({self.fastlio_count} poses)')
+            self.file_fastlio = None
+            self._log_or_print(f'FAST-LIO2 trajectory saved ({self.fastlio_count} poses)')
         if self.file_fused:
             self.file_fused.close()
-            self.get_logger().info(f'Fused odom trajectory saved ({self.fused_count} poses)')
+            self.file_fused = None
+            self._log_or_print(f'Fused odom trajectory saved ({self.fused_count} poses)')
         if self.file_odom:
             self.file_odom.close()
-            self.get_logger().info(f'Raw leg odom trajectory saved ({self.odom_count} poses)')
+            self.file_odom = None
+            self._log_or_print(f'Raw leg odom trajectory saved ({self.odom_count} poses)')
         super().destroy_node()
+
+    def _log_or_print(self, message: str):
+        """Use stdout if ROS has already shut down after SIGINT."""
+        if rclpy.ok():
+            self.get_logger().info(message)
+        else:
+            print(f'[trajectory_recorder] {message}', flush=True)
 
 
 def main(args=None):
@@ -147,7 +157,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
