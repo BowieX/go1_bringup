@@ -219,8 +219,9 @@ def generate_launch_description():
     )
 
     # ---------------- 6. rosbag 自动录制 ----------------
-    # 关键原始话题全量录制, 供后续消融实验回放 (见 go1_replay.launch.py).
+    # 关键原始话题与低成本诊断话题全量录制, 供后续消融实验回放 (见 go1_replay.launch.py).
     # 话题选择依据: FAST-LIO 需要 /livox/{lidar,imu}; robot_localization 需要 /odom /imu;
+    #              /joint_states 等 Unitree 诊断话题用于核对步态/关节状态, 数据量远小于点云;
     #              /tf_static 让外参在离线重建时可复用; /cmd_vel + goal/status 用于导航 trial 分析;
     #              /Odometry 录制算法输出, 便于无需重跑 FAST-LIO 即可核对轨迹.
     # 注: 不录 /tf (动态 TF 在回放时会由 FAST-LIO 重新生成, 录了也会冲突).
@@ -229,6 +230,9 @@ def generate_launch_description():
     bag_topics = [
         '/livox/lidar', '/livox/imu',
         '/odom', '/imu',
+        '/joint_states',
+        '/bms_state',
+        '/sensor_ranges',
         '/tf_static',
         '/cmd_vel',
         '/goal_pose',
