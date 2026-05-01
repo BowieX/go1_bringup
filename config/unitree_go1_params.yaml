@@ -1,0 +1,18 @@
+unitree_ros_node:
+  ros__parameters:
+    ns: ""
+    robot_ip: "192.168.123.161"
+    robot_target_port: 8082
+
+    cmd_vel_topic_name: "/cmd_vel"
+    odom_topic_name: "/odom"
+    imu_topic_name: "/imu"
+    bms_state_topic_name: "/bms_state"
+    joint_states_topic_name: "/joint_states"
+
+    imu_frame_id: "imu"
+    odom_frame_id: "unitree_odom"
+    odom_child_frame_id: "unitree_base"
+
+    use_obstacle_avoidance: false
+    low_batt_shutdown_threshold: 20

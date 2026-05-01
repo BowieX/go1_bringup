@@ -187,15 +187,25 @@ def slice_and_rasterize(
     """
     Z 切片 -> 2D 栅格化 -> 返回 (grid, origin_x, origin_y).
 
-    grid 语义: 0=未知, 1=空闲(ground-plane 扫过但无命中), 2=占据(命中数 >= hit_threshold).
+    grid 语义 (实际只用 1/2 两种):
+      1 = 空闲 (bbox 内未被命中的格子)
+      2 = 占据 (命中数 >= hit_threshold)
+      0 = 保留位 (本简化版无 raytracing, 不区分 unknown, save_pgm 中也不使用)
+
+    Z 切片基准 (重要):
+      切片 Z 用的是 FAST-LIO 的 camera_init 帧, 该帧 Z=0 在启动时机器人 IMU/body
+      位置 (≈ 离地 ~0.30 m, 不是地面). 因此默认值 [0.05, 0.25] 切的是 body 高度
+      +5 cm 到 +25 cm (≈ 离地 0.35-0.55 m), 落在 LiDAR 安装高度 (~0.57 m) 略下方,
+      能稳定捕获走廊/房间的连续墙面. 想包括低矮障碍 (椅腿/箱子) 应当下探到负值,
+      例如 [-0.20, 0.05].
 
     核心思路:
-      1. Z 切片: 只保留 z ∈ [z_min, z_max] 的点, 这些点落在机器人碰撞高度内,
-         即 Nav2 关心的障碍物层.
+      1. Z 切片: 只保留 z ∈ [z_min, z_max] 的点, 落在机器人碰撞高度带内.
       2. 命中计数: 在 XY 平面用 resolution 栅格累加, 超阈值则标为占据.
       3. 空闲区域: 此处采用"简化版" - 凡是在 bbox 内、未被命中的格子全部标空闲.
          真正的 raytracing (光追) 需要传感器位姿序列, 离线 PCD 里已丢失, 所以只能近似.
-         对 Nav2 规划足够 (空闲区域稍微夸大不影响避障, inflation layer 会修正).
+         对已完整覆盖的室内区域可用于 Nav2 初步规划; 若建图轨迹没有覆盖到开阔边界
+         或玻璃/低矮障碍, 必须实机复核并适当裁剪地图。
     """
     # Z 切片
     z = xyz[:, 2]
@@ -228,7 +238,7 @@ def slice_and_rasterize(
     hits = np.zeros((height, width), dtype=np.int32)
     np.add.at(hits, (row, col), 1)
 
-    # 生成 occupancy grid: 0=未知, 1=空闲, 2=占据
+    # 生成 occupancy grid: 1=空闲, 2=占据 (本简化版无 raytracing, 不输出 unknown)
     grid = np.zeros((height, width), dtype=np.uint8)
     # 先把 bbox 内所有非命中格子标为空闲 (简化: 不做真实 raytracing)
     grid[:] = 1  # 全部先假设空闲
@@ -246,10 +256,16 @@ def slice_and_rasterize(
 # ============================================================================
 
 def save_pgm(path: Path, grid: np.ndarray) -> None:
-    """P5 二值 pgm, Nav2 trinary 模式约定: 0=occupied, 254=free, 205=unknown."""
+    """
+    P5 灰度 pgm, Nav2 trinary 像素值映射: 0=occupied, 254=free, 205=unknown.
+
+    本简化版 grid 只有 1/2 两种 (无 raytracing, 不区分 unknown), 因此
+    实际输出的像素只有 0 (occupied) 和 254 (free), 205 仅作为 grid==0
+    的兜底, 当前流程不会触发.
+    """
     h, w = grid.shape
     # 像素值映射
-    img = np.full_like(grid, 205, dtype=np.uint8)  # unknown
+    img = np.full_like(grid, 205, dtype=np.uint8)  # unknown 兜底 (本流程不触发)
     img[grid == 1] = 254  # free
     img[grid == 2] = 0    # occupied
     header = f"P5\n{w} {h}\n255\n".encode("ascii")
@@ -290,9 +306,11 @@ def main() -> int:
     ap.add_argument("out_dir", type=Path, help="输出目录 (会创建 <map_name>.pgm/.yaml)")
     ap.add_argument("map_name", type=str, help="地图文件名前缀, 例如 my_lab")
     ap.add_argument("--z-min", type=float, default=0.05,
-                    help="Z 切片下界 (米, map 坐标系): 低于此值视为地面 (默认 0.05)")
+                    help="Z 切片下界 (米, FAST-LIO camera_init 帧, Z=0≈ body 启动位置 ≈ 离地 0.30 m). "
+                         "默认 0.05 ≈ 离地 0.35 m, 略低于 LiDAR (≈0.57 m)")
     ap.add_argument("--z-max", type=float, default=0.25,
-                    help="Z 切片上界 (米, map 坐标系): 高于此值视为顶部结构 (默认 0.25, Go1 腰部以下)")
+                    help="Z 切片上界 (米, camera_init 帧). 默认 0.25 ≈ 离地 0.55 m, "
+                         "[0.05, 0.25] 切胸-肩高度墙面带, 走廊/房间的连续墙体可被稳定捕获")
     ap.add_argument("--resolution", type=float, default=0.05,
                     help="栅格分辨率 (米/格, 默认 0.05 与 Nav2 costmap 一致)")
     ap.add_argument("--hit-threshold", type=int, default=2,

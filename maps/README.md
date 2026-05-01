@@ -10,7 +10,8 @@
 #    launch 的 auto_archive 还会同时把会话归档到 maps/sessions/<时间戳>/)
 ros2 launch go1_bringup go1_mapping.launch.py use_odom_fusion:=false
 
-# 2. 离线切片 (或使用 archive_map --promote 把最新会话的 both.* 晋升为 my_lab.*)
+# 2. 离线切片 (或使用 archive_map --promote 用最新 scans.pcd 重切并晋升为 my_lab.*;
+#    --promote 不能晋升历史会话目录里的 both.*, 详见 实验手册 §5.7)
 ros2 run go1_bringup pcd_to_map \
     ~/go1_ws/src/FAST_LIO/PCD/scans.pcd \
     ~/go1_ws/src/go1_bringup/maps \

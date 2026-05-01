@@ -51,15 +51,17 @@ def generate_launch_description():
 
     declare_record_bag = DeclareLaunchArgument(
         'record_bag',
-        default_value='true',
-        description='是否自动 rosbag 录制本次实验 (转发给 go1_base)')
+        default_value='false',
+        description='是否自动 rosbag 录制本次实验 (转发给 go1_base). '
+                    '默认 false: nav 阶段以链路检查 / Demo 为主, 默认录制会反复占盘. '
+                    '正式导航实验采集时显式 record_bag:=true.')
 
     declare_bag_dir = DeclareLaunchArgument(
         'bag_dir',
         default_value=os.path.join(os.path.expanduser('~'), 'go1_ws', 'bags', 'nav'),
         description='bag 输出根目录 (建议与 mapping 分开, 默认 ~/go1_ws/bags/nav)')
 
-    # 1. 启动底层 (驱动 + 里程计) - 注意：这里不带 SLAM
+    # 1. 启动底层 (驱动 + FAST-LIO 里程计 + 点云转 scan)
     base_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(go1_bringup_pkg, 'launch', 'go1_base.launch.py')

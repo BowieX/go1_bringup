@@ -5,6 +5,8 @@
 >
 > 读者: 论文审稿人 / 答辩评委 / 后续工作继承人。
 > 不包含: 使用方法（见 [实验手册](实验手册.md)）/ 调参（见 §10.1）/ 链路验证（见 [实机前联调检查清单](实机前联调检查清单.md)）。
+>
+> **当前状态（2026-04-30）**: 尚未完成实机实验。本文档是算法设计与实验计划；默认阈值为首次实机验证初始值，论文"实验结果"章节必须用后续实机采集数据填充。
 
 ---
 
@@ -239,7 +241,7 @@ if (odom_constraint_en) {
 | mutex 保护 | `mtx_odom` | 50Hz 回调线程 vs 10Hz LIO 更新线程的数据竞争 |
 | Odom 超时 | `age > timeout_sec` | EKF 崩溃后不再用 stale 位置拖偏滤波器 |
 | 首帧 SE(2) 对齐 one-shot | `odom_init_alignment_set` | 固定 `unitree_odom` 到 `camera_init` 的初始平面变换, 防止重复触发导致漂移 |
-| 触发率统计 | `g_total_constraint_frames`, `g_degraded_frames` | 消融实验可观测性 — 验证退化判据真的触发了 |
+| 触发率统计 | `g_total_constraint_frames`, `g_degraded_frames` | 消融实验可观测性 — 仅统计成功应用 odom 约束的帧, 验证退化判据真的触发了 |
 
 ---
 
@@ -271,7 +273,7 @@ if (odom_constraint_en) {
 
 ### 7.4 无绝对真值
 
-- 本实验无动捕/RTK 真值, 所有评估指标基于**相对**标准（闭环漂移 + 卷尺测已知几何距离）。
+- 本实验无动捕/RTK 真值, 所有评估指标基于**相对**标准（平面闭环漂移 + 卷尺测已知几何距离）。
 - **论文建议**: 明确声明此前提, 避免审稿人质疑; APE 绝不以 baseline 作参考计算。
 
 ### 7.5 初始 SE(2) 对齐的"静止启动"假设
@@ -290,31 +292,52 @@ if (odom_constraint_en) {
 - **量级估计**: Go1 平稳遥控启动加速度 ~0.3 m/s², 1 s 偏移量约 0.15 m;
   在 σ_degraded = 0.1 的强约束下, 退化段会被这个偏置稳定拖偏 ~0.1–0.15 m。
   这与"无融合时退化漂移 0.5–1.0 m"相比量级小得多, 但属于**可消除**的系统性误差。
-- **缓解 (推荐组合)**:
-  1. **流程保证**: 启动 `go1_base.launch.py use_odom_fusion:=true` 后, 让机器狗站立静止
-     ≥ 1 s 再发 `/cmd_vel`; 这是消融实验脚本里默认的做法。
-  2. **代码加速度门控** (可选, 不增加复杂度): 在 `apply_odom_position_constraint`
-     设置初始 SE(2) 对齐之前增加 `if (state_point.vel.norm() < 0.05) {...}` 守卫, 让首帧采样
-     必须在 FAST-LIO 状态收敛且机器人速度接近 0 时进行; 否则推迟初始对齐到下一帧。
-  3. **多点对齐** (进一步工作): 使用启动后短时间静止窗口内多帧均值估计初始位置和 yaw,
-     比单帧对齐更抗 IMU/odom 瞬时噪声。
-- **论文建议**: 在"实现细节 / 系统假设"小节列明此约束, 与 §7.2 (yaw 对齐局限) 并列;
-  实验流程章节明确写"采集启动后静止 ≥ 1 s 再开始遥控"。
+- **现行缓解措施**:
+  1. **代码端: 静止启动守卫** (已实现, `apply_odom_position_constraint` 内 "静止启动守卫" 注释段):
+     设置初始 SE(2) 对齐之前同时检查 FAST-LIO **平面速度** (`sqrt(vel_x² + vel_y²)`)
+     与 odom **平面速度** 都 `< 0.05 m/s`, 任一速度仍 ≥ 5 cm/s 则推迟到下一帧。
+     不取 `vel.norm()` (3D) 是因为 Go1 步态会让 Z 速度即使在"完全站立"时也短时震荡到
+     0.1-0.2 m/s 量级, 用 3D 范数会让守卫长期挂在"还在动"分支永不对齐;
+     而初始 SE(2) 对齐本身只关心平面位姿。
+     该守卫把"是否静止"的判断从人工流程下沉到代码, 即使操作者忘记静止 1 s 启动,
+     算法本身也会等 LIO/EKF 平面速度都收敛到 < 5 cm/s 后才设置初始对齐;
+     如果连续 5 s 仍未收敛 (例如 IMU 线松/EKF 崩溃), 守卫会节流打印诊断警告,
+     而不会静默挂死。
+  2. **流程保证**: 启动 `go1_base.launch.py use_odom_fusion:=true` 后, 仍建议让机器狗站立静止
+     ≥ 1 s 再发 `/cmd_vel`; 守卫只是 fallback, 流程保证可以让首帧对齐发生在 FAST-LIO 完全
+     收敛后, 而不是 LIO 速度刚降到 5 cm/s 的边缘瞬间。
+- **进一步工作**:
+  - **多点对齐**: 使用启动后短时间静止窗口内多帧均值估计初始位置和 yaw,
+    比单帧对齐更抗 IMU/odom 瞬时噪声。
+  - **更稳健的静止检测**: 引入多帧速度均值或零速检测, 避免单帧速度刚好低于阈值的边缘情况。
+- **论文建议**: 在"实现细节 / 系统假设"小节列明此约束并说明已用速度门控缓解,
+  与 §7.2 (yaw 对齐局限) 并列; 实验流程章节明确写"采集启动后静止 ≥ 1 s 再开始遥控"。
 
 ---
 
-## 8. 创新贡献陈述 (论文摘要可用)
+## 8. 工程贡献陈述 (论文摘要可用)
 
-1. **提出 FAST-LIO2 在走廊类几何退化场景下的位置约束增强方法**:
-   首帧完成 `unitree_odom` 到 `camera_init` 的 SE(2) 初始平面对齐, 在 IESEKF
-   点面迭代收敛后追加一次基于外部融合里程计平面位移的 XY 位置观测更新，
-   量测矩阵 H = [I₂, 0₂×₂₁] (2×23), Joseph form 协方差更新保证数值稳定性。
-2. **引入基于有效特征数与残差均值的在线退化检测**, 动态切换量测噪声 R
-   (σ_normal=10.0 ↔ σ_degraded=0.1), 实现"正常场景几乎不干预、退化场景强约束"的选择性增强。
-3. **工程上与 robot_localization EKF + FAST-LIO2 无缝集成**, 无需重新推导 Jacobian, 改动 ≈ 100 行 C++,
-   保留了 FAST-LIO2 原有的 ikd-Tree 增量建图与 IMU 预积分能力。
-4. **面向宇树 Go1 四足平台的完整部署**: 含 Livox MID-360S 驱动、pointcloud_to_laserscan、Nav2
-   (AMCL + A* + TEB) 全栈集成, 代码与实验流程开源。
+> **定位**: 本节描述本毕业设计在已有开源工作 (FAST-LIO2 / robot_localization) 之上的
+> **工程贡献与系统集成**, 不主张全新算法。各点配套数据见实验五/六, 论文撰写时建议
+> 与 §4.2 (退化判据选型权衡) 和 §7 (已知局限) 对照, 避免审稿人质疑。
+
+1. **退化感知的腿部里程计 XY 位置约束集成**:
+   在 FAST-LIO2 的 IESEKF 框架下, 首帧完成 `unitree_odom` 到 `camera_init` 的 SE(2)
+   初始平面对齐, 点面迭代收敛后追加一次基于外部融合里程计平面位移的 XY 位置观测更新
+   (量测矩阵 H = [I₂, 0₂×₂₁], Joseph form 协方差更新). 该集成方式在 FAST-LIO2 上游
+   未提供, 是本项目针对四足平台几何退化场景的工程改造; 数学公式本身是标准 Kalman 量测更新。
+2. **退化判据与噪声切换的联动机制**:
+   退化判据复用 FAST-LIO 已有诊断量 (`effct_feat_num` / `res_mean_last`),
+   不主张此判据的发明权 (见 §4.2 选型对比); 本项目的工程贡献是把该判据与量测噪声
+   `R = σ²·I₂` 的双档切换 (σ_normal=10.0 ↔ σ_degraded=0.1) 联动, 实现"正常场景几乎不干预、
+   退化场景强约束"的选择性增强, 并以触发率 (20%-60% 期望区间) 作为可观测验证手段。
+3. **与 robot_localization EKF + FAST-LIO2 的无缝集成**:
+   两套子模块均为现有开源工作, 本项目对它们的耦合改动 ≈ 100 行 C++ (主要在
+   `laserMapping.cpp` 的 odom 回调 + `apply_odom_position_constraint` + 主循环集成点),
+   保留了 FAST-LIO2 原有的 ikd-Tree 增量建图与 IMU 预积分能力, 不需重新推导 Jacobian。
+4. **面向宇树 Go1 四足平台的完整自主导航系统部署**:
+   含 Livox MID-360S 驱动适配、`pointcloud_to_laserscan` 跟随者过滤、PCD → 2D 栅格离线切片
+   建图工具链、Nav2 (AMCL + A* + TEB) 全栈集成、消融实验回放与评估脚本; 代码与实验流程开源。
 
 ---
 
@@ -333,6 +356,6 @@ if (odom_constraint_en) {
 
 - FAST-LIO2 原论文: Xu et al., "FAST-LIO2: Fast Direct LiDAR-Inertial Odometry", IEEE T-RO 2022.
 - robot_localization: Moore & Stouch, "A Generalized Extended Kalman Filter Implementation for the ROS", IAS 2014.
-- 实现细节: [FAST_LIO/src/laserMapping.cpp](../../FAST_LIO/src/laserMapping.cpp) 第 146-282 行 (核心函数 `apply_odom_position_constraint` + odom 回调与全局变量) 与第 1234-1267 行 (主循环集成点)
+- 实现细节: [FAST_LIO/src/laserMapping.cpp](../../FAST_LIO/src/laserMapping.cpp) — 用编辑器搜 `// ====== 里程计位置约束相关变量 ======` 起始的全局变量段、`odom_cbk` 回调、`apply_odom_position_constraint` 核心函数; 主循环集成点搜 `// ==================== 里程计位置约束 (几何退化场景增强) ====================` 注释。(避免使用行号引用, 因为代码迭代会让行号漂移)
 - 消融实验流程: [实验手册 §7](实验手册.md)
 - 调参闭环: [实验手册 §10.1](实验手册.md)

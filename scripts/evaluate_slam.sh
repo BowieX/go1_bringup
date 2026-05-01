@@ -3,7 +3,7 @@
 # SLAM 消融实验评估脚本
 #
 # 评估指标 (均不依赖外部动捕系统):
-#   1. 闭环漂移 — 闭合回路首尾位移差 (m)，主指标
+#   1. 平面闭环漂移 — 闭合回路首尾 XY 位移差 (m)，主指标
 #   2. 已知几何误差 — SLAM 轨迹中两点距离 vs 卷尺实测距离 (m)
 #   3. 轨迹对比图 — evo_traj 俯视图，定性对比
 #   4. 轨迹一致性 RPE — 基线 vs 改进版的相对位姿误差 (m)
@@ -72,7 +72,7 @@ if [ ! -f "${BASELINE}" ] || [ ! -f "${IMPROVED}" ]; then
 fi
 
 # ------------------------------------------------------------------
-# 工具函数: 计算闭环漂移 (TUM 轨迹首尾位置欧氏距离)
+# 工具函数: 计算平面闭环漂移 (TUM 轨迹首尾 XY 位移差)
 # ------------------------------------------------------------------
 calc_loop_closure_drift() {
     local traj_file=$1
@@ -87,8 +87,7 @@ else:
     last = lines[-1].split()
     dx = float(last[1]) - float(first[1])
     dy = float(last[2]) - float(first[2])
-    dz = float(last[3]) - float(first[3])
-    drift = math.sqrt(dx*dx + dy*dy + dz*dz)
+    drift = math.sqrt(dx*dx + dy*dy)
     print(f'{drift:.4f}')
 "
 }
@@ -189,10 +188,10 @@ except:
 }
 
 # ==================================================================
-# 阶段 1: 闭环漂移 (核心指标)
+# 阶段 1: 平面闭环漂移 (核心指标)
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "[1/5] 闭环漂移 (Loop Closure Drift)"
+echo "[1/5] 平面闭环漂移 (Planar Loop Closure Drift)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 DRIFT_BASELINE=$(calc_loop_closure_drift "${BASELINE}")
@@ -200,8 +199,8 @@ DRIFT_IMPROVED=$(calc_loop_closure_drift "${IMPROVED}")
 LEN_BASELINE=$(calc_trajectory_length "${BASELINE}")
 LEN_IMPROVED=$(calc_trajectory_length "${IMPROVED}")
 
-echo "  基线:   闭环漂移 = ${DRIFT_BASELINE} m  (轨迹长度 ${LEN_BASELINE} m)"
-echo "  改进版: 闭环漂移 = ${DRIFT_IMPROVED} m  (轨迹长度 ${LEN_IMPROVED} m)"
+echo "  基线:   平面闭环漂移 = ${DRIFT_BASELINE} m  (轨迹长度 ${LEN_BASELINE} m)"
+echo "  改进版: 平面闭环漂移 = ${DRIFT_IMPROVED} m  (轨迹长度 ${LEN_IMPROVED} m)"
 
 # 计算漂移率 (漂移/轨迹长度 × 100%)
 python3 -c "
@@ -284,7 +283,7 @@ echo ""
 # 关键验证指标: 若触发率为 0, 说明退化阈值过严(feat_threshold 太低 /
 # residual_threshold 太高), 改进版实际上从未激活里程计强约束, 此时
 # 与基线的漂移差距几乎全部来自"常开弱约束", 论文立论会站不住脚.
-# 期望值: 走廊消融实验中 20%-60% 触发率为合理区间.
+# 期望值: 走廊消融实验中 20%-60% 触发率为合理区间 (与 algorithm_design.md 一致).
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "[5/5] 退化触发率 (Degradation Trigger Rate)"
@@ -304,17 +303,17 @@ if [ -f "${IMPROVED_LOG}" ]; then
         echo "  最后一次汇报: ${LAST_STAT}"
         echo "  退化帧 / 总约束帧 = ${DEGRADED_FRAMES} / ${TOTAL_FRAMES}"
         echo "  触发率           = ${TRIGGER_RATE}%"
-        # 异常区间提示
+        # 异常区间提示 (区间与 algorithm_design.md / 实验手册 §7.6 保持一致)
         python3 -c "
 rate = float('${TRIGGER_RATE}')
-if rate < 5.0:
-    print('  [WARN] 触发率过低 (<5%): 退化判据几乎没触发, 创新未生效')
-    print('         → 建议降低 feat_threshold 或 residual_threshold 后重跑')
-elif rate > 80.0:
-    print('  [WARN] 触发率过高 (>80%): 退化判据过于敏感, 几乎全程强约束')
-    print('         → 建议提高 feat_threshold 或 residual_threshold 后重跑')
+if rate < 20.0:
+    print('  [WARN] 触发率过低 (<20%): 退化判据偏严, 创新只在很短窗口生效')
+    print('         → 建议降低 feat_threshold 或抬高 residual_threshold 后重跑')
+elif rate > 60.0:
+    print('  [WARN] 触发率过高 (>60%): 退化判据过于敏感, 接近全程强约束, 失去"仅退化时增强"语义')
+    print('         → 建议提高 feat_threshold 或降低 residual_threshold 后重跑')
 else:
-    print('  [OK]   触发率在合理区间 (5-80%)')
+    print('  [OK]   触发率在合理区间 (20-60%)')
 " 2>/dev/null || true
     else
         echo "  [WARN] 日志中未找到 [OdomStat] 行"
@@ -338,7 +337,7 @@ echo "╚═══════════════════════�
 echo ""
 printf "%-24s | %-14s | %-14s\n" "指标" "基线(无融合)" "改进版(有融合)"
 printf "%-24s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------"
-printf "%-24s | %-14s | %-14s\n" "闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
+printf "%-24s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
 printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
 
 # 漂移率
@@ -347,7 +346,7 @@ b_drift, b_len = '${DRIFT_BASELINE}', '${LEN_BASELINE}'
 i_drift, i_len = '${DRIFT_IMPROVED}', '${LEN_IMPROVED}'
 b_rate = f'{float(b_drift)/float(b_len)*100:.2f}%' if b_drift != 'N/A' and b_len != 'N/A' and float(b_len)>0 else 'N/A'
 i_rate = f'{float(i_drift)/float(i_len)*100:.2f}%' if i_drift != 'N/A' and i_len != 'N/A' and float(i_len)>0 else 'N/A'
-print(f\"{'漂移率 (漂移/总长)':<24s} | {b_rate:<14s} | {i_rate:<14s}\")
+print(f\"{'平面漂移率 (漂移/总长)':<24s} | {b_rate:<14s} | {i_rate:<14s}\")
 "
 printf "%-24s | %-14s\n" "轨迹一致性 RPE RMSE (m)" "${RPE_RMSE}"
 printf "%-24s | %-14s\n" "退化触发率 (改进版)"    "${TRIGGER_RATE}%"
@@ -355,8 +354,8 @@ printf "%-24s | %-14s\n" "退化帧/总帧 (改进版)"  "${DEGRADED_FRAMES}/${T
 
 echo ""
 echo "说明:"
-echo "  - 闭环漂移: 闭合回路首尾欧氏距离, 越小越好"
-echo "  - 漂移率: 闭环漂移/轨迹总长, 反映累积漂移速率"
+echo "  - 平面闭环漂移: 闭合回路首尾 XY 位移差, 越小越好"
+echo "  - 漂移率: 平面闭环漂移/轨迹总长, 反映累积漂移速率"
 echo "  - RPE: 两条轨迹局部段运动差异, 退化段越大说明两种方法差异越大"
 echo "  - 退化触发率: 改进版运行期间 feat_num<阈值 或 res_mean>阈值 的帧占比"
 echo "                触发率=0% 意味创新未激活, 必须排查阈值"
@@ -371,7 +370,7 @@ SUMMARY_FILE="${RESULTS_DIR}/summary.txt"
     echo ""
     printf "%-24s | %-14s | %-14s\n" "指标" "基线(无融合)" "改进版(有融合)"
     printf "%-24s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------"
-    printf "%-24s | %-14s | %-14s\n" "闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
+    printf "%-24s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
     printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
     printf "%-24s | %-14s\n" "轨迹一致性 RPE RMSE (m)" "${RPE_RMSE}"
     printf "%-24s | %-14s\n" "退化触发率 (改进版)"    "${TRIGGER_RATE}%"

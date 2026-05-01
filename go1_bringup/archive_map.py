@@ -24,7 +24,8 @@ archive_map.py — 建图会话归档: 复制 PCD + 4 变体栅格地图 + 论�
 
     # 自动从 launch OnShutdown 触发 (见 go1_mapping.launch.py auto_archive 参数)
 
-    # 把归档里 both.* 晋升为 maps/my_lab.* (Nav2 默认加载的那份)
+    # 用当前 scans.pcd 跑切片 + 同步 both.* 到 maps/my_lab.*
+    # 注意: 这只能晋升"刚建完的本次结果", 无法回头晋升历史会话 (见 --promote 限制).
     python3 archive_map.py --promote
 """
 from __future__ import annotations
@@ -159,11 +160,12 @@ def main() -> int:
     ap.add_argument("--no-compare", action="store_true",
                     help="跳过 matplotlib 对比图 (仅保留 pgm/yaml, 省 ~10 秒)")
     ap.add_argument("--promote", action="store_true",
-                    help="同时把 both.* 复制为 maps/my_lab.* (Nav2 默认加载). "
-                         "注意: --promote 会用本次传入的 --z-min/--z-max/--resolution/"
-                         "--hit-threshold/--padding 重新跑切片, 与之前归档的 both.* 可能不同; "
-                         "若想完全复用某次归档, 直接 cp sessions/<时间戳>/both.{pgm,yaml} "
-                         "到 maps/my_lab.* 并把 yaml 里 image: 字段改成 my_lab.pgm")
+                    help="把本次产出的 both.* 复制为 maps/my_lab.* (Nav2 默认加载). "
+                         "重要限制: --promote 总是基于**当前** FAST_LIO/PCD/scans.pcd 跑切片, "
+                         "无法晋升历史会话目录里的 both.* (因为 scans.pcd 已被新建图覆盖). "
+                         "想晋升某个历史会话, 直接 cp sessions/<时间戳>/both.{pgm,yaml} "
+                         "到 maps/my_lab.* 并把 yaml 里 image: 字段改成 my_lab.pgm "
+                         "(详见 实验手册.md §5.7).")
     ap.add_argument("--wait-seconds", type=float, default=10.0,
                     help="等待 PCD 文件稳定的最长秒数 (默认 10, FAST-LIO 析构落盘需时间)")
     # pcd_to_map.py 透传参数 (切片 + 栅格化)

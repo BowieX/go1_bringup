@@ -24,6 +24,27 @@ def _load_lidar_extrinsics(share_dir):
     )
 
 
+def _resolve_livox_mid360s_launch(livox_share_dir):
+    """优先使用已安装的 MID360s launch, install 过期时回退到源码 launch_ROS2."""
+    installed = os.path.join(livox_share_dir, 'launch', 'msg_MID360s_launch.py')
+    if os.path.exists(installed):
+        return installed
+
+    # 当前工程采用 ~/go1_ws/src 作为 colcon 工作区根。旧 install 里可能只装了
+    # msg_MID360_launch.py, 但源码 launch_ROS2 下已经有 MID360s 版本; 为了让
+    # go1_base 在重编译 livox_ros_driver2 前也能给出可执行路径, 这里做一次回退。
+    workspace_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(livox_share_dir))))
+    source_launch = os.path.join(
+        workspace_root, 'livox_ros_driver2', 'launch_ROS2', 'msg_MID360s_launch.py')
+    if os.path.exists(source_launch):
+        return source_launch
+
+    raise FileNotFoundError(
+        '未找到 Livox MID360s launch。请重新编译 livox_ros_driver2, 或确认 '
+        'livox_ros_driver2/launch_ROS2/msg_MID360s_launch.py 存在。')
+
+
 def generate_launch_description():
     # ---------------- Launch 参数 ----------------
     use_odom_fusion = LaunchConfiguration('use_odom_fusion')
@@ -71,6 +92,10 @@ def generate_launch_description():
     pc2scan_config = os.path.join(bringup_pkg, 'config', 'pointcloud_to_laserscan_params.yaml')
     # EKF融合里程计配置 (robot_localization)
     ekf_config = os.path.join(bringup_pkg, 'config', 'ekf_odom_fusion.yaml')
+    # Unitree 参数由 go1_bringup 提供一份项目内固定配置，避免当前环境误解析到
+    # /opt/ros/humble/share/unitree_ros 后使用 odom/base_link 默认帧。
+    unitree_config = os.path.join(bringup_pkg, 'config', 'unitree_go1_params.yaml')
+    livox_launch = _resolve_livox_mid360s_launch(livox_pkg)
 
     # ---------------- 1. 硬件驱动 ----------------
     # Unitree Go1 驱动 (底层运动控制)
@@ -78,12 +103,15 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(unitree_pkg, 'launch', 'unitree_driver_launch.py')
         ),
+        launch_arguments={
+            'params_file': unitree_config,
+        }.items()
     )
 
     # Livox MID360S 驱动 (注意是 MID360s 不是 MID360, 且 launch 不接受 launch_arguments)
     livox_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(livox_pkg, 'launch', 'msg_MID360s_launch.py')
+            livox_launch
         ),
     )
 
@@ -185,7 +213,7 @@ def generate_launch_description():
     # ---------------- 6. rosbag 自动录制 ----------------
     # 关键原始话题全量录制, 供后续消融实验回放 (见 go1_replay.launch.py).
     # 话题选择依据: FAST-LIO 需要 /livox/{lidar,imu}; robot_localization 需要 /odom /imu;
-    #              /tf_static 让外参在离线重建时可复用; /cmd_vel 用于导航 trial 分析;
+    #              /tf_static 让外参在离线重建时可复用; /cmd_vel + goal/status 用于导航 trial 分析;
     #              /Odometry 录制算法输出, 便于无需重跑 FAST-LIO 即可核对轨迹.
     # 注: 不录 /tf (动态 TF 在回放时会由 FAST-LIO 重新生成, 录了也会冲突).
     bag_stamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -195,6 +223,8 @@ def generate_launch_description():
         '/odom', '/imu',
         '/tf_static',
         '/cmd_vel',
+        '/goal_pose',
+        '/navigate_to_pose/_action/status',
         '/Odometry',
     ]
     bag_record = ExecuteProcess(
@@ -213,6 +243,9 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_record_bag,
         declare_bag_dir,
+        LogInfo(msg=['[go1_base] unitree_ros share: ', unitree_pkg]),
+        LogInfo(msg=['[go1_base] Unitree params: ', unitree_config]),
+        LogInfo(msg=['[go1_base] Livox launch: ', livox_launch]),
         bag_log,
         unitree_driver,
         livox_driver,
