@@ -22,9 +22,11 @@
 # 输入文件 (TUM 格式，由 record_trajectory.py 生成):
 #   <dir>/traj_fastlio_baseline.txt   — 基线 FAST-LIO2 (关闭 odom 约束)
 #   <dir>/traj_fastlio_improved.txt   — 改进 FAST-LIO2 (开启 odom 约束)
+#   <dir>/traj_fastlio_always.txt     — 常开强约束消融 (可选, force_degraded:=true)
 #   <dir>/geometry_constraints.csv    — 已知几何距离 (可选, 见下方格式说明)
 #   <dir>/fastlio_improved.log        — 改进版 FAST-LIO 终端日志 (可选, 用于退化触发率统计)
 #                                       生成方法: 在 §7.4 回放时 `2>&1 | tee <dir>/fastlio_improved.log`
+#   <dir>/fastlio_always.log          — 常开强约束 FAST-LIO 日志 (可选)
 #
 # geometry_constraints.csv 格式 (无表头):
 #   标签, 实测距离(m), 起点x, 起点y, 终点x, 终点y
@@ -47,8 +49,14 @@ mkdir -p "${RESULTS_DIR}"
 
 BASELINE="${TRAJ_DIR}/traj_fastlio_baseline.txt"
 IMPROVED="${TRAJ_DIR}/traj_fastlio_improved.txt"
+ALWAYS="${TRAJ_DIR}/traj_fastlio_always.txt"
 GEOMETRY="${TRAJ_DIR}/geometry_constraints.csv"
 IMPROVED_LOG="${TRAJ_DIR}/fastlio_improved.log"
+ALWAYS_LOG="${TRAJ_DIR}/fastlio_always.log"
+HAS_ALWAYS=false
+if [ -f "${ALWAYS}" ]; then
+    HAS_ALWAYS=true
+fi
 
 echo "=================================================="
 echo " SLAM 消融实验评估 (无动捕真值方案)"
@@ -67,7 +75,8 @@ if [ ! -f "${BASELINE}" ] || [ ! -f "${IMPROVED}" ]; then
     echo "  1. 录制 rosbag:  ros2 bag record /livox/lidar /livox/imu /odom /imu -o <name>"
     echo "  2. 回放基线:     ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=false"
     echo "  3. 回放改进版:   ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true"
-    echo "  4. 两次回放都用 record_trajectory.py 记录轨迹 (加 -p experiment_label:=baseline/improved)"
+    echo "  4. 可选常开约束: ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true force_degraded:=true"
+    echo "  5. 每次回放都用 record_trajectory.py 记录轨迹 (experiment_label:=baseline/improved/always)"
     exit 1
 fi
 
@@ -198,21 +207,36 @@ DRIFT_BASELINE=$(calc_loop_closure_drift "${BASELINE}")
 DRIFT_IMPROVED=$(calc_loop_closure_drift "${IMPROVED}")
 LEN_BASELINE=$(calc_trajectory_length "${BASELINE}")
 LEN_IMPROVED=$(calc_trajectory_length "${IMPROVED}")
+DRIFT_ALWAYS="N/A"
+LEN_ALWAYS="N/A"
+if ${HAS_ALWAYS}; then
+    DRIFT_ALWAYS=$(calc_loop_closure_drift "${ALWAYS}")
+    LEN_ALWAYS=$(calc_trajectory_length "${ALWAYS}")
+fi
 
 echo "  基线:   平面闭环漂移 = ${DRIFT_BASELINE} m  (轨迹长度 ${LEN_BASELINE} m)"
 echo "  改进版: 平面闭环漂移 = ${DRIFT_IMPROVED} m  (轨迹长度 ${LEN_IMPROVED} m)"
+if ${HAS_ALWAYS}; then
+    echo "  常开版: 平面闭环漂移 = ${DRIFT_ALWAYS} m  (轨迹长度 ${LEN_ALWAYS} m)"
+fi
 
 # 计算漂移率 (漂移/轨迹长度 × 100%)
 python3 -c "
 b_drift, b_len = '${DRIFT_BASELINE}', '${LEN_BASELINE}'
 i_drift, i_len = '${DRIFT_IMPROVED}', '${LEN_IMPROVED}'
+a_drift, a_len = '${DRIFT_ALWAYS}', '${LEN_ALWAYS}'
 if b_drift != 'N/A' and b_len != 'N/A' and float(b_len) > 0:
     print(f'  基线漂移率:   {float(b_drift)/float(b_len)*100:.2f}%')
 if i_drift != 'N/A' and i_len != 'N/A' and float(i_len) > 0:
     print(f'  改进版漂移率: {float(i_drift)/float(i_len)*100:.2f}%')
+if a_drift != 'N/A' and a_len != 'N/A' and float(a_len) > 0:
+    print(f'  常开版漂移率: {float(a_drift)/float(a_len)*100:.2f}%')
 if b_drift != 'N/A' and i_drift != 'N/A' and float(b_drift) > 0:
     reduction = (1.0 - float(i_drift)/float(b_drift)) * 100
     print(f'  漂移降低:     {reduction:.1f}%')
+if i_drift != 'N/A' and a_drift != 'N/A':
+    diff = float(a_drift) - float(i_drift)
+    print(f'  常开-退化感知漂移差: {diff:.4f} m')
 "
 echo ""
 
@@ -230,6 +254,11 @@ if [ -f "${GEOMETRY}" ]; then
     echo ""
     echo "  --- 改进版 ---"
     calc_geometry_errors "${IMPROVED}" "${GEOMETRY}" "SLAM"
+    if ${HAS_ALWAYS}; then
+        echo ""
+        echo "  --- 常开强约束 ---"
+        calc_geometry_errors "${ALWAYS}" "${GEOMETRY}" "SLAM"
+    fi
 else
     echo "  [跳过] 未找到 ${GEOMETRY}"
     echo "  创建方法: 用卷尺量实验场地中的已知距离 (廊长/房间宽/柱间距等),"
@@ -249,7 +278,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 echo "  生成俯视轨迹对比图..."
 # ROS REP-103 坐标系 (X 前, Y 左, Z 上): 俯视图是 XY 平面 (不是 XZ, XZ 是侧视图)
-evo_traj tum "${BASELINE}" "${IMPROVED}" \
+TRAJ_FILES=("${BASELINE}" "${IMPROVED}")
+if ${HAS_ALWAYS}; then
+    TRAJ_FILES+=("${ALWAYS}")
+fi
+evo_traj tum "${TRAJ_FILES[@]}" \
     --plot_mode xy \
     --save_plot "${RESULTS_DIR}/trajectory_comparison.png" \
     2>&1 | tee "${RESULTS_DIR}/traj_comparison.log" || echo "  [WARN] evo_traj 失败, 跳过"
@@ -275,10 +308,23 @@ RPE_RMSE="N/A"
 if [ -f "${RESULTS_DIR}/rpe_consistency.zip" ]; then
     RPE_RMSE=$(extract_evo_rmse "${RESULTS_DIR}/rpe_consistency.zip")
 fi
+
+RPE_ALWAYS_RMSE="N/A"
+if ${HAS_ALWAYS}; then
+    echo ""
+    echo "  额外计算: 退化感知 vs 常开强约束 的局部差异"
+    evo_rpe tum "${IMPROVED}" "${ALWAYS}" -va \
+        --delta 1 --delta_unit m \
+        --save_results "${RESULTS_DIR}/rpe_improved_vs_always.zip" \
+        2>&1 | tee "${RESULTS_DIR}/rpe_improved_vs_always.log" || echo "  [WARN] evo_rpe 常开对比失败, 跳过"
+    if [ -f "${RESULTS_DIR}/rpe_improved_vs_always.zip" ]; then
+        RPE_ALWAYS_RMSE=$(extract_evo_rmse "${RESULTS_DIR}/rpe_improved_vs_always.zip")
+    fi
+fi
 echo ""
 
 # ==================================================================
-# 阶段 5: 退化触发率 (仅改进版; 需要 fastlio_improved.log)
+# 阶段 5: 退化触发率 (改进版必需; 常开强约束可选)
 #
 # 关键验证指标: 若触发率为 0, 说明退化阈值过严(feat_threshold 太低 /
 # residual_threshold 太高), 改进版实际上从未激活里程计强约束, 此时
@@ -292,6 +338,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 TRIGGER_RATE="N/A"
 DEGRADED_FRAMES="N/A"
 TOTAL_FRAMES="N/A"
+ALWAYS_TRIGGER_RATE="N/A"
+ALWAYS_DEGRADED_FRAMES="N/A"
+ALWAYS_TOTAL_FRAMES="N/A"
 if [ -f "${IMPROVED_LOG}" ]; then
     # 抓取最后一条 [OdomStat] 汇报行, 形如:
     #   [OdomStat] degraded=123/456 (27.0%), feat_num=..., res_mean=...
@@ -325,6 +374,27 @@ else
     echo "    ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true \\"
     echo "        2>&1 | tee ${IMPROVED_LOG}"
 fi
+if ${HAS_ALWAYS}; then
+    echo ""
+    echo "  --- 常开强约束日志 ---"
+    if [ -f "${ALWAYS_LOG}" ]; then
+        LAST_ALWAYS_STAT=$(grep '\[OdomStat\]' "${ALWAYS_LOG}" | tail -n 1)
+        if [ -n "${LAST_ALWAYS_STAT}" ]; then
+            ALWAYS_DEGRADED_FRAMES=$(echo "${LAST_ALWAYS_STAT}" | sed -n 's/.*degraded=\([0-9]*\)\/[0-9]*.*/\1/p')
+            ALWAYS_TOTAL_FRAMES=$(echo   "${LAST_ALWAYS_STAT}" | sed -n 's/.*degraded=[0-9]*\/\([0-9]*\).*/\1/p')
+            ALWAYS_TRIGGER_RATE=$(echo   "${LAST_ALWAYS_STAT}" | sed -n 's/.*(\([0-9.]*\)%).*/\1/p')
+            echo "  最后一次汇报: ${LAST_ALWAYS_STAT}"
+            echo "  常开版触发率   = ${ALWAYS_TRIGGER_RATE}%"
+            echo "  说明: force_degraded:=true 时该值应接近 100%, 用来证明常开强约束实验配置生效。"
+        else
+            echo "  [WARN] 常开日志中未找到 [OdomStat] 行"
+        fi
+    else
+        echo "  [跳过] 未找到 ${ALWAYS_LOG}"
+        echo "  生成方法: ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true force_degraded:=true \\"
+        echo "        2>&1 | tee ${ALWAYS_LOG}"
+    fi
+fi
 echo ""
 
 # ==================================================================
@@ -335,22 +405,42 @@ echo "╔═══════════════════════�
 echo "║          消融实验评估汇总 (单次实验)             ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
-printf "%-24s | %-14s | %-14s\n" "指标" "基线(无融合)" "改进版(有融合)"
-printf "%-24s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------"
-printf "%-24s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
-printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
+if ${HAS_ALWAYS}; then
+    printf "%-24s | %-14s | %-14s | %-14s\n" "指标" "基线(无融合)" "退化感知" "常开强约束"
+    printf "%-24s-+-%-14s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------" "--------------"
+    printf "%-24s | %-14s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}" "${DRIFT_ALWAYS}"
+    printf "%-24s | %-14s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}" "${LEN_ALWAYS}"
+else
+    printf "%-24s | %-14s | %-14s\n" "指标" "基线(无融合)" "改进版(有融合)"
+    printf "%-24s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------"
+    printf "%-24s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
+    printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
+fi
 
 # 漂移率
 python3 -c "
 b_drift, b_len = '${DRIFT_BASELINE}', '${LEN_BASELINE}'
 i_drift, i_len = '${DRIFT_IMPROVED}', '${LEN_IMPROVED}'
+a_drift, a_len = '${DRIFT_ALWAYS}', '${LEN_ALWAYS}'
+has_always = '${HAS_ALWAYS}' == 'true'
 b_rate = f'{float(b_drift)/float(b_len)*100:.2f}%' if b_drift != 'N/A' and b_len != 'N/A' and float(b_len)>0 else 'N/A'
 i_rate = f'{float(i_drift)/float(i_len)*100:.2f}%' if i_drift != 'N/A' and i_len != 'N/A' and float(i_len)>0 else 'N/A'
-print(f\"{'平面漂移率 (漂移/总长)':<24s} | {b_rate:<14s} | {i_rate:<14s}\")
+a_rate = f'{float(a_drift)/float(a_len)*100:.2f}%' if a_drift != 'N/A' and a_len != 'N/A' and float(a_len)>0 else 'N/A'
+if has_always:
+    print(f\"{'平面漂移率 (漂移/总长)':<24s} | {b_rate:<14s} | {i_rate:<14s} | {a_rate:<14s}\")
+else:
+    print(f\"{'平面漂移率 (漂移/总长)':<24s} | {b_rate:<14s} | {i_rate:<14s}\")
 "
 printf "%-24s | %-14s\n" "轨迹一致性 RPE RMSE (m)" "${RPE_RMSE}"
+if ${HAS_ALWAYS}; then
+    printf "%-24s | %-14s\n" "退化感知-常开 RPE (m)" "${RPE_ALWAYS_RMSE}"
+fi
 printf "%-24s | %-14s\n" "退化触发率 (改进版)"    "${TRIGGER_RATE}%"
 printf "%-24s | %-14s\n" "退化帧/总帧 (改进版)"  "${DEGRADED_FRAMES}/${TOTAL_FRAMES}"
+if ${HAS_ALWAYS}; then
+    printf "%-24s | %-14s\n" "常开触发率" "${ALWAYS_TRIGGER_RATE}%"
+    printf "%-24s | %-14s\n" "常开退化帧/总帧" "${ALWAYS_DEGRADED_FRAMES}/${ALWAYS_TOTAL_FRAMES}"
+fi
 
 echo ""
 echo "说明:"
@@ -368,13 +458,27 @@ SUMMARY_FILE="${RESULTS_DIR}/summary.txt"
     echo "日期: $(date '+%Y-%m-%d %H:%M')"
     echo "轨迹目录: ${TRAJ_DIR}"
     echo ""
-    printf "%-24s | %-14s | %-14s\n" "指标" "基线(无融合)" "改进版(有融合)"
-    printf "%-24s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------"
-    printf "%-24s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
-    printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
+    if ${HAS_ALWAYS}; then
+        printf "%-24s | %-14s | %-14s | %-14s\n" "指标" "基线(无融合)" "退化感知" "常开强约束"
+        printf "%-24s-+-%-14s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------" "--------------"
+        printf "%-24s | %-14s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}" "${DRIFT_ALWAYS}"
+        printf "%-24s | %-14s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}" "${LEN_ALWAYS}"
+    else
+        printf "%-24s | %-14s | %-14s\n" "指标" "基线(无融合)" "改进版(有融合)"
+        printf "%-24s-+-%-14s-+-%-14s\n" "------------------------" "--------------" "--------------"
+        printf "%-24s | %-14s | %-14s\n" "平面闭环漂移 (m)" "${DRIFT_BASELINE}" "${DRIFT_IMPROVED}"
+        printf "%-24s | %-14s | %-14s\n" "轨迹长度 (m)" "${LEN_BASELINE}" "${LEN_IMPROVED}"
+    fi
     printf "%-24s | %-14s\n" "轨迹一致性 RPE RMSE (m)" "${RPE_RMSE}"
+    if ${HAS_ALWAYS}; then
+        printf "%-24s | %-14s\n" "退化感知-常开 RPE (m)" "${RPE_ALWAYS_RMSE}"
+    fi
     printf "%-24s | %-14s\n" "退化触发率 (改进版)"    "${TRIGGER_RATE}%"
     printf "%-24s | %-14s\n" "退化帧/总帧 (改进版)"  "${DEGRADED_FRAMES}/${TOTAL_FRAMES}"
+    if ${HAS_ALWAYS}; then
+        printf "%-24s | %-14s\n" "常开触发率" "${ALWAYS_TRIGGER_RATE}%"
+        printf "%-24s | %-14s\n" "常开退化帧/总帧" "${ALWAYS_DEGRADED_FRAMES}/${ALWAYS_TOTAL_FRAMES}"
+    fi
 } > "${SUMMARY_FILE}"
 
 echo "=================================================="

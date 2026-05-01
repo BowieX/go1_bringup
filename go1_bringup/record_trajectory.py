@@ -16,9 +16,10 @@ record_mode 选项:
 
 experiment_label 参数 (可选):
   设置后输出文件名会包含此标签，方便 evaluate_slam.sh 直接使用:
-    - 'baseline'  → traj_fastlio_baseline.txt
-    - 'improved'  → traj_fastlio_improved.txt
-    - ''          → traj_fastlio.txt (默认，不加标签)
+	    - 'baseline'  → traj_fastlio_baseline.txt
+	    - 'improved'  → traj_fastlio_improved.txt
+	    - 'always'    → traj_fastlio_always.txt
+	    - ''          → traj_fastlio.txt (默认，不加标签)
 
 使用方式 (在线):
   python3 record_trajectory.py --ros-args -p output_dir:=/path -p record_mode:=both

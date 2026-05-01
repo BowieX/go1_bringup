@@ -242,6 +242,7 @@ if (odom_constraint_en) {
 | Odom 超时 | `age > timeout_sec` | EKF 崩溃后不再用 stale 位置拖偏滤波器 |
 | 首帧 SE(2) 对齐 one-shot | `odom_init_alignment_set` | 固定 `unitree_odom` 到 `camera_init` 的初始平面变换, 防止重复触发导致漂移 |
 | 触发率统计 | `g_total_constraint_frames`, `g_degraded_frames` | 消融实验可观测性 — 仅统计成功应用 odom 约束的帧, 验证退化判据真的触发了 |
+| 常开强约束开关 | `odom_constraint.force_degraded` | 机制消融专用; 所有约束帧使用退化高权重, 用来对比"简单常开融合"与"退化感知融合" |
 
 ---
 
@@ -329,8 +330,9 @@ if (odom_constraint_en) {
 2. **退化判据与噪声切换的联动机制**:
    退化判据复用 FAST-LIO 已有诊断量 (`effct_feat_num` / `res_mean_last`),
    不主张此判据的发明权 (见 §4.2 选型对比); 本项目的工程贡献是把该判据与量测噪声
-   `R = σ²·I₂` 的双档切换 (σ_normal=10.0 ↔ σ_degraded=0.1) 联动, 实现"正常场景几乎不干预、
-   退化场景强约束"的选择性增强, 并以触发率 (20%-60% 期望区间) 作为可观测验证手段。
+	   `R = σ²·I₂` 的双档切换 (σ_normal=10.0 ↔ σ_degraded=0.1) 联动, 实现"正常场景几乎不干预、
+	   退化场景强约束"的选择性增强, 并以触发率 (20%-60% 期望区间) 作为可观测验证手段。
+	   `force_degraded:=true` 常开强约束组只用于消融, 论文中应与非退化场景对照一起说明其副作用。
 3. **与 robot_localization EKF + FAST-LIO2 的无缝集成**:
    两套子模块均为现有开源工作, 本项目对它们的耦合改动 ≈ 100 行 C++ (主要在
    `laserMapping.cpp` 的 odom 回调 + `apply_odom_position_constraint` + 主循环集成点),

@@ -22,6 +22,7 @@ def generate_launch_description():
     params_file = LaunchConfiguration('params_file')
     use_odom_fusion = LaunchConfiguration('use_odom_fusion')
     enable_odom_constraint = LaunchConfiguration('enable_odom_constraint')
+    force_odom_degraded = LaunchConfiguration('force_odom_degraded')
     record_bag = LaunchConfiguration('record_bag')
     bag_dir = LaunchConfiguration('bag_dir')
 
@@ -49,6 +50,12 @@ def generate_launch_description():
         description='是否让 FAST-LIO 使用 /odometry/filtered 作为退化场景位置约束 '
                     '(需要 use_odom_fusion:=true)')
 
+    declare_force_odom_degraded = DeclareLaunchArgument(
+        'force_odom_degraded',
+        default_value='false',
+        description='是否强制所有里程计约束帧按退化高权重处理 '
+                    '(仅用于常开强约束消融, 正式导航保持 false)')
+
     declare_record_bag = DeclareLaunchArgument(
         'record_bag',
         default_value='false',
@@ -69,6 +76,7 @@ def generate_launch_description():
         launch_arguments={
             'use_odom_fusion': use_odom_fusion,
             'enable_odom_constraint': enable_odom_constraint,
+            'force_odom_degraded': force_odom_degraded,
             'record_bag': record_bag,
             'bag_dir': bag_dir,
         }.items()
@@ -103,6 +111,7 @@ def generate_launch_description():
         declare_params,
         declare_use_odom_fusion,
         declare_enable_odom_constraint,
+        declare_force_odom_degraded,
         declare_record_bag,
         declare_bag_dir,
         base_launch,

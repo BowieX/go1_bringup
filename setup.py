@@ -43,6 +43,7 @@ setup(
             'record_trajectory = go1_bringup.record_trajectory:main',
             'nav_metrics = go1_bringup.nav_metrics:main',
             'measure_geometry = go1_bringup.measure_geometry:main',
+            'experiment_log = go1_bringup.experiment_log:main',
         ],
     },
 )

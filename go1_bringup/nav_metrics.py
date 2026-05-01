@@ -7,8 +7,9 @@
   - 成功/失败状态 (SUCCEEDED / ABORTED / CANCELED)
   - 导航耗时 (秒)
   - 路径长度 (米，基于 /Odometry 累积)
+	  - /cmd_vel 速度变化与角速度峰值（用于评价控制平滑性）
 
-  每完成一次 trial 立刻写入一行 CSV。
+  每完成一次 trial 立刻写入一行汇总 CSV，并额外保存 trial 内逐帧 /cmd_vel。
 
 实现方式:
   订阅 /navigate_to_pose/_action/status 话题 (action_msgs/msg/GoalStatusArray)，
@@ -17,11 +18,13 @@
     STATUS_SUCCEEDED (4) → 成功
     STATUS_CANCELED  (5) / STATUS_ABORTED (6) → 失败
   同时订阅 /goal_pose 以获取目标点（方便记录和打印），
-  订阅 /Odometry (FAST-LIO) 累积实际行走路径。
+  订阅 /Odometry (FAST-LIO) 累积实际行走路径，
+  订阅 /cmd_vel 统计每个 trial 内的速度变化和平滑性。
 
-使用方式:
-  python3 nav_metrics.py --ros-args \
-    -p output_file:=/path/to/nav_metrics.csv
+	使用方式:
+	  python3 nav_metrics.py --ros-args \
+	    -p output_file:=/path/to/nav_metrics.csv \
+	    -p cmd_vel_output_file:=/path/to/nav_metrics_cmd_vel.csv
 """
 
 import os
@@ -34,7 +37,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 
 
 # GoalStatus 常量映射 (便于日志输出)
@@ -63,7 +66,15 @@ class NavMetricsRecorder(Node):
         self.declare_parameter(
             'output_file',
             os.path.expanduser('~/go1_ws/trajectories/nav_metrics.csv'))
+        self.declare_parameter('cmd_vel_topic', '/cmd_vel')
+        self.declare_parameter('cmd_vel_output_file', '')
         output_file = self.get_parameter('output_file').get_parameter_value().string_value
+        cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
+        cmd_vel_output_file = (
+            self.get_parameter('cmd_vel_output_file').get_parameter_value().string_value)
+        if not cmd_vel_output_file:
+            base, ext = os.path.splitext(output_file)
+            cmd_vel_output_file = f'{base}_cmd_vel{ext or ".csv"}'
 
         # 创建输出目录并打开 CSV
         output_dir = os.path.dirname(output_file)
@@ -74,9 +85,30 @@ class NavMetricsRecorder(Node):
         self.csv_writer.writerow([
             'trial_id', 'timestamp', 'status',
             'duration_s', 'path_length_m',
-            'goal_x', 'goal_y', 'goal_yaw'
+            'goal_x', 'goal_y', 'goal_yaw',
+            'cmd_samples',
+            'cmd_linear_peak_mps',
+            'cmd_angular_peak_radps',
+            'cmd_linear_delta_mean_mps',
+            'cmd_linear_delta_max_mps',
+            'cmd_angular_delta_mean_radps',
+            'cmd_angular_delta_max_radps',
+            'cmd_linear_accel_peak_mps2',
+            'cmd_angular_accel_peak_radps2'
         ])
         self.csv_file.flush()
+
+        cmd_vel_output_dir = os.path.dirname(cmd_vel_output_file)
+        if cmd_vel_output_dir:
+            os.makedirs(cmd_vel_output_dir, exist_ok=True)
+        self.cmd_vel_csv_file = open(cmd_vel_output_file, 'w', newline='')
+        self.cmd_vel_csv_writer = csv.writer(self.cmd_vel_csv_file)
+        self.cmd_vel_csv_writer.writerow([
+            'trial_id', 'stamp_s',
+            'vx_mps', 'vy_mps', 'wz_radps',
+            'linear_speed_mps', 'angular_abs_radps'
+        ])
+        self.cmd_vel_csv_file.flush()
 
         # === 状态变量 ===
         self.trial_id = 0
@@ -89,6 +121,7 @@ class NavMetricsRecorder(Node):
         self.current_goal_pose = None  # PoseStamped，用于记录目标 xy/yaw
         # 已记录过的 terminal goal_id，避免重复写入
         self.recorded_goal_ids = set()
+        self._reset_cmd_metrics()
 
         # === QoS ===
         # Nav2 action status 话题使用 reliable+transient_local，必须匹配
@@ -108,6 +141,10 @@ class NavMetricsRecorder(Node):
         self.sub_goal = self.create_subscription(
             PoseStamped, '/goal_pose', self.goal_callback, 10)
 
+        # 最终发送给 unitree_ros 的速度命令 - 用于控制平滑性评估
+        self.sub_cmd_vel = self.create_subscription(
+            Twist, cmd_vel_topic, self.cmd_vel_callback, 20)
+
         # Nav2 action status - trial 起止的权威来源
         self.sub_status = self.create_subscription(
             GoalStatusArray,
@@ -115,7 +152,9 @@ class NavMetricsRecorder(Node):
             self.status_callback,
             action_status_qos)
 
-        self.get_logger().info(f'Nav metrics recorder started. Output: {output_file}')
+        self.get_logger().info(
+            f'Nav metrics recorder started. Output: {output_file}, cmd_vel: {cmd_vel_topic}')
+        self.get_logger().info(f'Raw cmd_vel samples: {cmd_vel_output_file}')
         self.get_logger().info('Waiting for navigation goals...')
 
     # ----------------------------------------------------------------------
@@ -143,6 +182,57 @@ class NavMetricsRecorder(Node):
             if dist < 1.0:
                 self.path_length += dist
         self.last_pos = (pos.x, pos.y)
+
+    # ----------------------------------------------------------------------
+    # 速度命令回调：统计每个 trial 内的速度跳变、峰值和接收端近似加速度
+    # ----------------------------------------------------------------------
+    def cmd_vel_callback(self, msg: Twist):
+        if self.current_goal_id is None:
+            return
+
+        now = self.get_clock().now()
+        vx = msg.linear.x
+        vy = msg.linear.y
+        wz = msg.angular.z
+
+        linear_speed = math.sqrt(vx * vx + vy * vy)
+        angular_abs = abs(wz)
+        stamp_s = now.nanoseconds / 1e9
+        self.cmd_vel_csv_writer.writerow([
+            self.trial_id,
+            f'{stamp_s:.9f}',
+            f'{vx:.4f}',
+            f'{vy:.4f}',
+            f'{wz:.4f}',
+            f'{linear_speed:.4f}',
+            f'{angular_abs:.4f}',
+        ])
+        self.cmd_samples += 1
+        self.cmd_linear_peak = max(self.cmd_linear_peak, linear_speed)
+        self.cmd_angular_peak = max(self.cmd_angular_peak, angular_abs)
+
+        if self.last_cmd is not None:
+            last_vx, last_vy, last_wz = self.last_cmd
+            linear_delta = math.sqrt((vx - last_vx) ** 2 + (vy - last_vy) ** 2)
+            angular_delta = abs(wz - last_wz)
+
+            self.cmd_delta_count += 1
+            self.cmd_linear_delta_sum += linear_delta
+            self.cmd_angular_delta_sum += angular_delta
+            self.cmd_linear_delta_max = max(self.cmd_linear_delta_max, linear_delta)
+            self.cmd_angular_delta_max = max(self.cmd_angular_delta_max, angular_delta)
+
+            if self.last_cmd_time is not None:
+                dt = (now - self.last_cmd_time).nanoseconds / 1e9
+                # /cmd_vel 无 header，只能用接收时间估计；过滤时钟未启动或异常长间隔。
+                if 0.001 <= dt <= 1.0:
+                    self.cmd_linear_accel_peak = max(
+                        self.cmd_linear_accel_peak, linear_delta / dt)
+                    self.cmd_angular_accel_peak = max(
+                        self.cmd_angular_accel_peak, angular_delta / dt)
+
+        self.last_cmd = (vx, vy, wz)
+        self.last_cmd_time = now
 
     # ----------------------------------------------------------------------
     # 核心：Nav2 action status 回调
@@ -181,7 +271,42 @@ class NavMetricsRecorder(Node):
         self.nav_start_time = self.get_clock().now()
         self.path_length = 0.0
         self.last_pos = None
+        self._reset_cmd_metrics()
         self.get_logger().info(f'[Trial {self.trial_id}] Navigation started')
+
+    def _reset_cmd_metrics(self):
+        self.cmd_samples = 0
+        self.cmd_delta_count = 0
+        self.cmd_linear_peak = 0.0
+        self.cmd_angular_peak = 0.0
+        self.cmd_linear_delta_sum = 0.0
+        self.cmd_angular_delta_sum = 0.0
+        self.cmd_linear_delta_max = 0.0
+        self.cmd_angular_delta_max = 0.0
+        self.cmd_linear_accel_peak = 0.0
+        self.cmd_angular_accel_peak = 0.0
+        self.last_cmd = None
+        self.last_cmd_time = None
+
+    def _cmd_metric_values(self):
+        if self.cmd_delta_count > 0:
+            linear_delta_mean = self.cmd_linear_delta_sum / self.cmd_delta_count
+            angular_delta_mean = self.cmd_angular_delta_sum / self.cmd_delta_count
+        else:
+            linear_delta_mean = 0.0
+            angular_delta_mean = 0.0
+
+        return [
+            str(self.cmd_samples),
+            f'{self.cmd_linear_peak:.3f}',
+            f'{self.cmd_angular_peak:.3f}',
+            f'{linear_delta_mean:.4f}',
+            f'{self.cmd_linear_delta_max:.4f}',
+            f'{angular_delta_mean:.4f}',
+            f'{self.cmd_angular_delta_max:.4f}',
+            f'{self.cmd_linear_accel_peak:.3f}',
+            f'{self.cmd_angular_accel_peak:.3f}',
+        ]
 
     def _finalize_trial(self, status: int):
         if self.current_goal_id in self.recorded_goal_ids:
@@ -204,6 +329,8 @@ class NavMetricsRecorder(Node):
             cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
             goal_yaw = math.atan2(siny, cosy)
 
+        cmd_metrics = self._cmd_metric_values()
+
         self.csv_writer.writerow([
             self.trial_id,
             datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -212,13 +339,16 @@ class NavMetricsRecorder(Node):
             f'{self.path_length:.3f}',
             f'{goal_x:.3f}',
             f'{goal_y:.3f}',
-            f'{goal_yaw:.3f}'
+            f'{goal_yaw:.3f}',
+            *cmd_metrics
         ])
         self.csv_file.flush()
+        self.cmd_vel_csv_file.flush()
 
         self.get_logger().info(
             f'[Trial {self.trial_id}] {status_str} | '
-            f'time={duration:.1f}s | path={self.path_length:.2f}m')
+            f'time={duration:.1f}s | path={self.path_length:.2f}m | '
+            f'cmd_peak=({self.cmd_linear_peak:.2f}m/s, {self.cmd_angular_peak:.2f}rad/s)')
 
         self.current_goal_id = None
 
@@ -228,6 +358,7 @@ class NavMetricsRecorder(Node):
         if self.current_goal_id is not None:
             self._finalize_trial(GoalStatus.STATUS_CANCELED)
         self.csv_file.close()
+        self.cmd_vel_csv_file.close()
         self.get_logger().info(f'Nav metrics saved. Total trials: {self.trial_id}')
         super().destroy_node()
 

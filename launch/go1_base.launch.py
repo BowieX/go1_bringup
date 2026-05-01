@@ -60,6 +60,13 @@ def generate_launch_description():
         description='是否让 FAST-LIO 使用 /odometry/filtered 作为退化场景位置约束 '
                     '(需要 use_odom_fusion:=true 或已有 /odometry/filtered 发布者)')
 
+    force_odom_degraded = LaunchConfiguration('force_odom_degraded')
+    declare_force_odom_degraded = DeclareLaunchArgument(
+        'force_odom_degraded',
+        default_value='false',
+        description='是否强制 FAST-LIO 将所有里程计约束帧视为退化帧 '
+                    '(仅用于常开强约束消融实验, 正式建图/导航保持 false)')
+
     use_sim_time = LaunchConfiguration('use_sim_time')
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
@@ -178,6 +185,7 @@ def generate_launch_description():
             'config_file': 'mid360.yaml',
             'use_sim_time': use_sim_time,
             'odom_constraint_enable': enable_odom_constraint,
+            'odom_constraint_force_degraded': force_odom_degraded,
         }.items()
     )
 
@@ -240,6 +248,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_odom_fusion,
         declare_enable_odom_constraint,
+        declare_force_odom_degraded,
         declare_use_sim_time,
         declare_record_bag,
         declare_bag_dir,

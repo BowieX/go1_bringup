@@ -4,6 +4,7 @@
 #
 # 功能: 不启动硬件驱动，仅启动算法节点，配合 rosbag 回放进行离线对比实验。
 #       通过 odom_constraint 参数切换基线 (无融合) 和改进版 (有融合) 模式。
+#       force_degraded:=true 可把改进版切换为"常开强约束"机制消融。
 #
 # 使用方式:
 #   终端1 (算法节点):
@@ -25,6 +26,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _load_lidar_extrinsics(share_dir):
@@ -44,10 +46,15 @@ def generate_launch_description():
 
     # ---------------- Launch 参数 ----------------
     odom_constraint = LaunchConfiguration('odom_constraint')
+    force_degraded = LaunchConfiguration('force_degraded')
     declare_odom_constraint = DeclareLaunchArgument(
         'odom_constraint',
         default_value='false',
         description='是否启用里程计融合约束 (false=基线, true=改进版)')
+    declare_force_degraded = DeclareLaunchArgument(
+        'force_degraded',
+        default_value='false',
+        description='是否强制所有里程计约束帧按退化高权重处理 (仅用于常开强约束消融)')
 
     # ---------------- 配置文件路径 ----------------
     fast_lio_config = os.path.join(fast_lio_pkg, 'config', 'mid360.yaml')
@@ -113,7 +120,9 @@ def generate_launch_description():
         parameters=[
             fast_lio_config,
             {'use_sim_time': True,
-             'odom_constraint.enable': True}
+             'odom_constraint.enable': True,
+             'odom_constraint.force_degraded': ParameterValue(
+                 force_degraded, value_type=bool)}
         ],
         output='screen',
         condition=IfCondition(odom_constraint)
@@ -135,6 +144,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_odom_constraint,
+        declare_force_degraded,
         lidar_tf,
         unitree_base_to_imu_tf,
         fast_lio_baseline,
