@@ -7,6 +7,8 @@
 #   2. 已知几何误差 — SLAM 轨迹中两点距离 vs 卷尺实测距离 (m)
 #   3. 轨迹对比图 — evo_traj 俯视图，定性对比
 #   4. 轨迹一致性 RPE — 基线 vs 改进版的相对位姿误差 (m)
+#   5. 退化触发率 — 改进版 [OdomStat] 末次汇报的退化帧占比
+#   6. 退化触发空间分布 — 把 [OdomFrame] 解析为退化点散点叠加到改进版 XY 轨迹
 #
 # 注意: 本脚本不计算 APE (Absolute Pose Error)。
 #       APE 需要 mm 级绝对真值 (动捕/RTK)，本项目不具备此条件。
@@ -332,7 +334,7 @@ echo ""
 # 期望值: 走廊消融实验中 20%-60% 触发率为合理区间 (与 algorithm_design.md 一致).
 # ==================================================================
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "[5/5] 退化触发率 (Degradation Trigger Rate)"
+echo "[5/6] 退化触发率 (Degradation Trigger Rate)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 TRIGGER_RATE="N/A"
@@ -394,6 +396,97 @@ if ${HAS_ALWAYS}; then
         echo "  生成方法: ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true force_degraded:=true \\"
         echo "        2>&1 | tee ${ALWAYS_LOG}"
     fi
+fi
+echo ""
+
+# ==================================================================
+# 阶段 6: 退化触发空间分布图 (改进版 / 常开版)
+#
+# 关键验证: 触发率 X% 可能集中在退化走廊段, 也可能全程随机抖动.
+# 论文需要证明前者. 本阶段把 [OdomFrame] 行解析为 (x, y, deg) 散点,
+# 退化点红色叠加在 XY 轨迹上, 期望看到红点聚集在长廊段.
+# ==================================================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "[6/6] 退化触发空间分布 (Degradation Spatial Distribution)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+plot_degradation_map() {
+    local log_file=$1
+    local traj_file=$2
+    local label=$3
+    local out_png=$4
+    if [ ! -f "${log_file}" ]; then
+        echo "  [跳过] ${label}: 未找到 ${log_file}"
+        return
+    fi
+    python3 - <<PYEOF
+import re, sys, os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+log_path = "${log_file}"
+traj_path = "${traj_file}"
+out_path  = "${out_png}"
+label     = "${label}"
+
+pat = re.compile(r"\[OdomFrame\]\s+t=([\-0-9.]+)\s+deg=([01])\s+x=([\-0-9.]+)\s+y=([\-0-9.]+)")
+deg_xy, ok_xy = [], []
+with open(log_path, errors='ignore') as f:
+    for line in f:
+        m = pat.search(line)
+        if not m:
+            continue
+        x, y = float(m.group(3)), float(m.group(4))
+        if m.group(2) == '1':
+            deg_xy.append((x, y))
+        else:
+            ok_xy.append((x, y))
+
+n_deg, n_ok = len(deg_xy), len(ok_xy)
+if n_deg + n_ok == 0:
+    print(f"  [WARN] {label}: 日志中未找到 [OdomFrame] 行 (需重编译 FAST_LIO)")
+    sys.exit(0)
+
+# 轨迹 (TUM: t x y z qx qy qz qw)
+tx, ty = [], []
+if os.path.isfile(traj_path):
+    with open(traj_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) >= 3:
+                tx.append(float(parts[1])); ty.append(float(parts[2]))
+
+fig, ax = plt.subplots(figsize=(8, 8))
+if tx:
+    ax.plot(tx, ty, '-', color='gray', linewidth=1.0, label='trajectory', alpha=0.7)
+if ok_xy:
+    xs, ys = zip(*ok_xy)
+    ax.scatter(xs, ys, s=4, c='tab:blue', alpha=0.4, label=f'normal ({n_ok})')
+if deg_xy:
+    xs, ys = zip(*deg_xy)
+    ax.scatter(xs, ys, s=10, c='tab:red', alpha=0.85, label=f'degraded ({n_deg})')
+
+rate = 100.0 * n_deg / max(1, n_deg + n_ok)
+ax.set_aspect('equal', adjustable='datalim')
+ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
+ax.set_title(f'{label}: degradation spatial distribution ({rate:.1f}% triggered)')
+ax.legend(loc='best'); ax.grid(True, linestyle=':', alpha=0.5)
+fig.tight_layout()
+fig.savefig(out_path, dpi=150)
+plt.close(fig)
+print(f"  {label}: deg={n_deg}/{n_deg+n_ok} ({rate:.1f}%), 图: {out_path}")
+PYEOF
+}
+
+plot_degradation_map "${IMPROVED_LOG}" "${IMPROVED}" "improved" \
+    "${RESULTS_DIR}/degradation_spatial_improved.png"
+if ${HAS_ALWAYS}; then
+    plot_degradation_map "${ALWAYS_LOG}" "${ALWAYS}" "always-on" \
+        "${RESULTS_DIR}/degradation_spatial_always.png"
 fi
 echo ""
 
