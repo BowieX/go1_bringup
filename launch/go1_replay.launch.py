@@ -9,6 +9,8 @@
 # 使用方式:
 #   终端1 (算法节点):
 #     ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=false
+#     ros2 launch go1_bringup go1_replay.launch.py odom_constraint:=true \
+#       degradation_feat_threshold:=400 degradation_residual_threshold:=0.15
 #   终端2 (轨迹记录):
 #     ros2 run go1_bringup record_trajectory --ros-args \
 #       -p use_sim_time:=true -p output_dir:=<path> -p record_mode:=fastlio
@@ -47,6 +49,8 @@ def generate_launch_description():
     # ---------------- Launch 参数 ----------------
     odom_constraint = LaunchConfiguration('odom_constraint')
     force_degraded = LaunchConfiguration('force_degraded')
+    degradation_feat_threshold = LaunchConfiguration('degradation_feat_threshold')
+    degradation_residual_threshold = LaunchConfiguration('degradation_residual_threshold')
     declare_odom_constraint = DeclareLaunchArgument(
         'odom_constraint',
         default_value='false',
@@ -55,6 +59,14 @@ def generate_launch_description():
         'force_degraded',
         default_value='false',
         description='是否强制所有里程计约束帧按退化高权重处理 (仅用于常开强约束消融)')
+    declare_degradation_feat_threshold = DeclareLaunchArgument(
+        'degradation_feat_threshold',
+        default_value='200',
+        description='退化判据: 有效特征点数低于该阈值时触发强里程计约束')
+    declare_degradation_residual_threshold = DeclareLaunchArgument(
+        'degradation_residual_threshold',
+        default_value='0.15',
+        description='退化判据: 平均残差高于该阈值时触发强里程计约束')
 
     # ---------------- 配置文件路径 ----------------
     fast_lio_config = os.path.join(fast_lio_pkg, 'config', 'mid360.yaml')
@@ -122,7 +134,11 @@ def generate_launch_description():
             {'use_sim_time': True,
              'odom_constraint.enable': True,
              'odom_constraint.force_degraded': ParameterValue(
-                 force_degraded, value_type=bool)}
+                 force_degraded, value_type=bool),
+             'odom_constraint.degradation_feat_threshold': ParameterValue(
+                 degradation_feat_threshold, value_type=int),
+             'odom_constraint.degradation_residual_threshold': ParameterValue(
+                 degradation_residual_threshold, value_type=float)}
         ],
         output='screen',
         condition=IfCondition(odom_constraint)
@@ -145,6 +161,8 @@ def generate_launch_description():
     return LaunchDescription([
         declare_odom_constraint,
         declare_force_degraded,
+        declare_degradation_feat_threshold,
+        declare_degradation_residual_threshold,
         lidar_tf,
         unitree_base_to_imu_tf,
         fast_lio_baseline,
