@@ -9,9 +9,9 @@
 #       而 FAST-LIO 3D 建图 (ikd-Tree 增量更新) 质量明显更高.
 #       离线切片避开 2D SLAM 弱点, Nav2 全栈保持原样.
 #
-# 2026-04-21: 接入 OnShutdown 自动归档 (auto_archive 参数, 默认 true)
-#   退出时调用 `ros2 run go1_bringup archive_map`, 把 scans.pcd 复制到
-#   maps/sessions/<时间戳>/ 并生成 4 套过滤变体 + 论文对比图.
+# 2026-05-02: 接入归档守护进程 (auto_archive 参数, 默认 true)
+#   launch 启动时拉起 archive_on_shutdown, 退出信号到来后等待 scans.pcd
+#   写入稳定, 再调用 archive_map 复制 PCD 并生成 4 套过滤变体 + 论文对比图.
 #   防止下次建图覆盖, 同时一次性产出对比素材.
 
 import os
@@ -22,10 +22,8 @@ from launch.actions import (
     ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
-    RegisterEventHandler,
 )
 from launch.conditions import IfCondition
-from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -106,29 +104,22 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3. OnShutdown 自动归档
+    # 3. 自动归档守护进程
     #
-    # FAST-LIO 在节点析构时才把累积点云写到 scans.pcd, 所以必须等所有子进程
-    # 退出后再调 archive_map.py. 用 OnShutdown 而不是 OnProcessExit, 因为本
-    # launch 没有直接持有 fast_lio_node 句柄 (它在 base_launch 内部).
-    #
-    # ExecuteProcess 在 shutdown 阶段会被同步等待完成, 所以 Ctrl+C 后终端会停留
-    # 1~2 分钟跑完归档 (大 PCD + 4 变体 + matplotlib). 不想等就传 auto_archive:=false.
-    archive_on_shutdown = RegisterEventHandler(
-        OnShutdown(
-            on_shutdown=[
-                LogInfo(msg='[go1_mapping] 退出, 正在归档本次建图 (auto_archive=true)...'),
-                ExecuteProcess(
-                    cmd=[
-                        'ros2', 'run', 'go1_bringup', 'archive_map',
-                        '--label', archive_label,
-                        '--wait-seconds', '15',
-                    ],
-                    output='screen',
-                    condition=IfCondition(auto_archive),
-                ),
-            ]
-        )
+    # FAST-LIO 在节点析构时才把累积点云写到 scans.pcd。此前用 OnShutdown
+    # 临时启动 archive_map, 实机 Ctrl+C 时容易被 launch 关闭流程取消, 导致
+    # 没有 sessions 目录。这里在 launch 启动时先拉起轻量 watcher, 退出信号
+    # 到来后由 watcher 等 PCD 稳定再归档, 比 shutdown 阶段新建进程更可靠。
+    archive_watcher = ExecuteProcess(
+        cmd=[
+            'ros2', 'run', 'go1_bringup', 'archive_on_shutdown',
+            '--label', archive_label,
+            '--wait-seconds', '30',
+        ],
+        output='screen',
+        condition=IfCondition(auto_archive),
+        sigterm_timeout='240',
+        sigkill_timeout='260',
     )
 
     return LaunchDescription([
@@ -139,7 +130,7 @@ def generate_launch_description():
         declare_bag_dir,
         declare_auto_archive,
         declare_archive_label,
+        archive_watcher,
         base_launch,
         rviz_node,
-        archive_on_shutdown,
     ])

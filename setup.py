@@ -39,6 +39,7 @@ setup(
         # 跨主机/跨工作区不再依赖绝对源码路径 (此前手册里到处是 python3 ~/go1_ws/src/...).
         'console_scripts': [
             'archive_map = go1_bringup.archive_map:main',
+            'archive_on_shutdown = go1_bringup.archive_on_shutdown:main',
             'pcd_to_map = go1_bringup.pcd_to_map:main',
             'record_trajectory = go1_bringup.record_trajectory:main',
             'nav_metrics = go1_bringup.nav_metrics:main',

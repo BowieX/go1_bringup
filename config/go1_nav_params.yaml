@@ -173,20 +173,19 @@ local_costmap:
       height: 5
       resolution: 0.05
       robot_radius: 0.32           # Go1 外接圆半径 (需与 TEB footprint_model.radius 一致)
-      plugins: ["voxel_layer", "inflation_layer"]
+      transform_tolerance: 0.5
+      # /scan 是 pointcloud_to_laserscan 生成的 2D LaserScan. 实机测试发现 VoxelLayer
+      # 会把 scan 原点的 z=-0.07m 左右视为低于 origin_z=0.0, 导致持续
+      # "Sensor origin ... is out of map bounds" 并影响 raytrace. 这里改用
+      # 2D ObstacleLayer: 局部避障仍使用实时 /scan, 但不再引入体素高度边界。
+      plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
         inflation_radius: 0.55
-      voxel_layer:
-        plugin: "nav2_costmap_2d::VoxelLayer"
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        publish_voxel_map: True
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
-        max_obstacle_height: 2.0
-        mark_threshold: 0
         observation_sources: scan
         scan:
           topic: /scan
@@ -209,20 +208,10 @@ global_costmap:
       robot_radius: 0.32           # 与 local_costmap 一致
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: True
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          obstacle_max_range: 2.5
-          inf_is_valid: true
+      transform_tolerance: 0.5
+      # 全局规划优先依赖已建静态地图, 避免实机短 demo 中实时 /scan 噪声或
+      # TF 抖动把全局路径直接判死; 动态障碍交给 local_costmap + TEB 做局部避让。
+      plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True

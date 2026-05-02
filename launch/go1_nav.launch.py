@@ -3,7 +3,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -19,22 +19,25 @@ def generate_launch_description():
     nav_params = os.path.join(go1_bringup_pkg, 'config', 'go1_nav_params.yaml')
 
     map_yaml_file = LaunchConfiguration('map')
-    params_file = LaunchConfiguration('params_file')
+    nav_params_file = LaunchConfiguration('nav_params_file')
     use_odom_fusion = LaunchConfiguration('use_odom_fusion')
     enable_odom_constraint = LaunchConfiguration('enable_odom_constraint')
     force_odom_degraded = LaunchConfiguration('force_odom_degraded')
     record_bag = LaunchConfiguration('record_bag')
     bag_dir = LaunchConfiguration('bag_dir')
+    use_composition = LaunchConfiguration('use_composition')
 
     declare_map = DeclareLaunchArgument(
         'map',
         default_value=default_map,
         description='Full path to map yaml file to load')
 
-    declare_params = DeclareLaunchArgument(
-        'params_file',
+    declare_nav_params = DeclareLaunchArgument(
+        'nav_params_file',
         default_value=nav_params,
-        description='Full path to the ROS2 parameters file to use')
+        description='Full path to the Nav2 ROS2 parameters file to use. '
+                    'Do not use params_file here: that name is reserved by nested '
+                    'driver launches and would overwrite the Nav2 config.')
 
     declare_use_odom_fusion = DeclareLaunchArgument(
         'use_odom_fusion',
@@ -68,6 +71,12 @@ def generate_launch_description():
         default_value=os.path.join(os.path.expanduser('~'), 'go1_ws', 'bags', 'nav'),
         description='bag 输出根目录 (建议与 mapping 分开, 默认 ~/go1_ws/bags/nav)')
 
+    declare_use_composition = DeclareLaunchArgument(
+        'use_composition',
+        default_value='False',
+        description='是否使用 Nav2 component composition. 实机默认 false: 保证 map/params '
+                    '按普通节点路径加载, 避免组合容器参数覆盖导致 map_server/TEB 配置丢失')
+
     # 1. 启动底层 (驱动 + FAST-LIO 里程计 + 点云转 scan)
     base_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -83,18 +92,27 @@ def generate_launch_description():
     )
 
     # 2. 启动 Nav2 (定位 + 规划 + 控制)
-    nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_pkg, 'launch', 'bringup_launch.py')
-        ),
-        launch_arguments={
-            'map': map_yaml_file,
-            'params_file': params_file,
-            'use_sim_time': 'False',
-            'slam': 'False',       # 关键点：禁用 Nav2 自带的 SLAM，使用 AMCL
-            'autostart': 'True',   # 自动让 Nav2 进入 Active 状态
-            'log_level': 'info'
-        }.items()
+    #
+    # 这里使用嵌套 ros2 launch 进程, 等价于现场已验证通过的手动命令:
+    #   ros2 launch nav2_bringup bringup_launch.py map:=... params_file:=...
+    #
+    # 原先 top-level 参数名也叫 params_file, 会和嵌套的 Unitree driver launch
+    # 撞名, 使 Nav2 误读 unitree_go1_params.yaml 并回落到默认 DWB 配置. 因此
+    # 本 launch 对外使用 nav_params_file, 再在调用 nav2_bringup 时转换成
+    # Nav2 需要的 params_file:=...
+    nav2_launch = ExecuteProcess(
+        cmd=[
+            'ros2', 'launch', 'nav2_bringup', 'bringup_launch.py',
+            ['map:=', map_yaml_file],
+            ['params_file:=', nav_params_file],
+            'use_sim_time:=False',
+            'slam:=False',          # 关键点：禁用 Nav2 自带的 SLAM，使用 AMCL
+            'autostart:=True',      # 自动让 Nav2 进入 Active 状态
+            ['use_composition:=', use_composition],
+            'use_respawn:=False',
+            'log_level:=info',
+        ],
+        output='screen',
     )
 
     # 3. Rviz (Nav2 视角)
@@ -106,15 +124,23 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}]
     )
 
+    # 现场实测一体化启动时, Nav2 与 Unitree/Livox/FAST-LIO 同时初始化会让
+    # lifecycle change_state 偶发超时, 虽然后续手动 lifecycle set 可恢复。这里
+    # 给底层驱动和 FAST-LIO 留出几秒完成初始化, 再启动 Nav2/RViz。
+    delayed_nav2_and_rviz = TimerAction(
+        period=8.0,
+        actions=[nav2_launch, rviz_node],
+    )
+
     return LaunchDescription([
         declare_map,
-        declare_params,
+        declare_nav_params,
         declare_use_odom_fusion,
         declare_enable_odom_constraint,
         declare_force_odom_degraded,
         declare_record_bag,
         declare_bag_dir,
+        declare_use_composition,
         base_launch,
-        nav2_launch,
-        rviz_node
+        delayed_nav2_and_rviz,
     ])
